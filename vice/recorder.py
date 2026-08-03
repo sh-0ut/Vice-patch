@@ -348,6 +348,28 @@ def _gsr_sanitize_args(args: list[str], blocked_flags: set[str]) -> list[str]:
     return out
 
 
+def _gsr_advanced_args(rc, manual: list[str]) -> list[str]:
+    """Validated UI-generated flags; manual Extra args win per flag."""
+    if not getattr(rc, "gsr_advanced_enabled", False):
+        return []
+    result: list[str] = []
+
+    def add(flag: str, value) -> None:
+        if not _gsr_has_any_flag(manual, flag):
+            result.extend([flag, str(value)])
+
+    mode = getattr(rc, "gsr_bitrate_mode", "qp")
+    add("-bm", mode)
+    quality = (getattr(rc, "gsr_video_bitrate", 40000)
+               if mode == "cbr" else getattr(rc, "gsr_quality", "very_high"))
+    add("-q", quality)
+    add("-fm", getattr(rc, "gsr_framerate_mode", "vfr"))
+    add("-keyint", getattr(rc, "gsr_keyint", 2.0))
+    add("-tune", getattr(rc, "gsr_tune", "performance"))
+    add("-ab", getattr(rc, "gsr_audio_bitrate", 160))
+    return result
+
+
 def _selected_display_id(rc, override: Optional[str] = None) -> Optional[str]:
     """The display to capture. `override` is the live follow-the-pointer pick,
     which wins over the saved choice without overwriting it."""
@@ -1260,6 +1282,7 @@ class Recorder(ABC):
     @staticmethod
     def _gsr_session_cmd(out_path: Path, rc, override: Optional[str] = None) -> list[str]:
         extra = _gsr_sanitize_args(_extra_gsr_args(rc.gsr_args), {"-o", "-r"})
+        advanced = _gsr_advanced_args(rc, extra)
         cmd = ["gpu-screen-recorder"]
 
         if not _gsr_has_any_flag(extra, "-w"):
@@ -1275,6 +1298,7 @@ class Recorder(ABC):
         if not _gsr_has_any_flag(extra, "-a"):
             cmd += _gsr_audio_args(rc, split_for_volume=False)
 
+        cmd += advanced
         cmd += extra
         cmd += ["-o", str(out_path)]
         return cmd
@@ -1828,6 +1852,7 @@ class GSRRecorder(Recorder):
     def _build_cmd(self) -> list[str]:
         rc = self.cfg.recording
         extra = _gsr_sanitize_args(_extra_gsr_args(rc.gsr_args), {"-o"})
+        advanced = _gsr_advanced_args(rc, extra)
         cmd = ["gpu-screen-recorder"]
 
         # Allow manual overrides through recording.gsr_args.
@@ -1860,6 +1885,7 @@ class GSRRecorder(Recorder):
         if not _gsr_has_any_flag(extra, "-a"):
             cmd += _gsr_audio_args(rc)
 
+        cmd += advanced
         cmd += extra
 
         # Output directory (gsr writes files here on SIGUSR1)

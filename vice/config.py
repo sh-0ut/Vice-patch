@@ -128,6 +128,16 @@ class RecordingConfig:
     # Optional extra flags appended to gpu-screen-recorder commands.
     # Example: "-k hevc -bm cbr -q 20000 -fm cfr"
     gsr_args: str = ""
+    # Optional structured GSR encoding controls. Manually entered gsr_args
+    # always win when they contain the same flag.
+    gsr_advanced_enabled: bool = False
+    gsr_bitrate_mode: str = "qp"       # auto | qp | vbr | cbr
+    gsr_quality: str = "very_high"     # medium | high | very_high | ultra
+    gsr_video_bitrate: int = 40000      # kbps, used for cbr
+    gsr_framerate_mode: str = "vfr"    # cfr | vfr | content
+    gsr_keyint: float = 2.0             # seconds
+    gsr_tune: str = "performance"      # performance | quality
+    gsr_audio_bitrate: int = 160        # kbps
     # gpu-screen-recorder desktop audio source. Examples:
     # default_output, device:alsa_output.pci.monitor, app:firefox, app-inverse:firefox
     gsr_audio_source: str = "default_output"
@@ -432,6 +442,28 @@ def clamp_recording_limits(cfg: Config) -> None:
             value = 1.0
         clean_gains[str(source)] = max(0.0, min(value, 2.0))
     rc.audio_track_mix_gains = clean_gains
+
+    choices = {
+        "gsr_bitrate_mode": ({"auto", "qp", "vbr", "cbr"}, "qp"),
+        "gsr_quality": ({"medium", "high", "very_high", "ultra"}, "very_high"),
+        "gsr_framerate_mode": ({"cfr", "vfr", "content"}, "vfr"),
+        "gsr_tune": ({"performance", "quality"}, "performance"),
+    }
+    for name, (allowed, fallback) in choices.items():
+        value = str(getattr(rc, name, fallback) or fallback).strip().lower()
+        setattr(rc, name, value if value in allowed else fallback)
+    try:
+        rc.gsr_video_bitrate = max(1000, min(int(rc.gsr_video_bitrate), 200000))
+    except (TypeError, ValueError):
+        rc.gsr_video_bitrate = 40000
+    try:
+        rc.gsr_audio_bitrate = max(32, min(int(rc.gsr_audio_bitrate), 512))
+    except (TypeError, ValueError):
+        rc.gsr_audio_bitrate = 160
+    try:
+        rc.gsr_keyint = max(0.1, min(float(rc.gsr_keyint), 30.0))
+    except (TypeError, ValueError):
+        rc.gsr_keyint = 2.0
 
 
 def _known_keys(cls, data: dict) -> dict:

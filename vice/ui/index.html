@@ -776,7 +776,49 @@
                 <span>Advanced · gpu-screen-recorder</span>
               </div>
               <div class="settings-row">
-                <div class="s-label"><strong>Extra args</strong><span>Optional flags appended to gpu-screen-recorder. Example: <code>-k hevc -bm cbr -q 20000 -fm cfr -a {default_sink_monitor}</code></span></div>
+                <div class="s-label"><strong>Advanced encoding controls</strong><span>Generate common gpu-screen-recorder flags from the fields below. Manual Extra args override matching fields.</span></div>
+                <label class="toggle"><input type="checkbox" id="s-gsr-advanced" onchange="syncGsrAdvancedRows()"><span class="toggle-track"></span></label>
+              </div>
+              <div id="s-gsr-advanced-fields">
+                <div class="settings-row">
+                  <div class="s-label"><strong>Bitrate mode</strong><span>QP keeps quality stable; CBR targets a fixed bitrate.</span></div>
+                  <select id="s-gsr-bm" onchange="syncGsrAdvancedRows()">
+                    <option value="qp">Constant quality (QP)</option>
+                    <option value="vbr">Variable bitrate (VBR)</option>
+                    <option value="cbr">Constant bitrate (CBR)</option>
+                    <option value="auto">Automatic</option>
+                  </select>
+                </div>
+                <div class="settings-row" id="row-gsr-quality">
+                  <div class="s-label"><strong>Quality</strong><span>Used in QP and VBR modes.</span></div>
+                  <select id="s-gsr-quality">
+                    <option value="medium">Medium</option><option value="high">High</option>
+                    <option value="very_high">Very high</option><option value="ultra">Ultra</option>
+                  </select>
+                </div>
+                <div class="settings-row" id="row-gsr-bitrate">
+                  <div class="s-label"><strong>Video bitrate</strong><span>CBR bitrate in kbps; for example 40000 = 40 Mbps.</span></div>
+                  <input type="number" id="s-gsr-bitrate" min="1000" max="200000" step="1000" value="40000">
+                </div>
+                <div class="settings-row">
+                  <div class="s-label"><strong>Frame rate mode</strong><span>CFR is convenient for editing; VFR is the recorder default.</span></div>
+                  <select id="s-gsr-fm"><option value="vfr">Variable (VFR)</option><option value="cfr">Constant (CFR)</option><option value="content">Match content</option></select>
+                </div>
+                <div class="settings-row">
+                  <div class="s-label"><strong>Keyframe interval</strong><span>Seconds between keyframes. Lower values improve seeking and trimming.</span></div>
+                  <input type="number" id="s-gsr-keyint" min="0.1" max="30" step="0.1" value="2">
+                </div>
+                <div class="settings-row">
+                  <div class="s-label"><strong>Encoder tune</strong><span>Quality can use more GPU resources; currently most relevant on NVIDIA.</span></div>
+                  <select id="s-gsr-tune"><option value="performance">Performance</option><option value="quality">Quality</option></select>
+                </div>
+                <div class="settings-row">
+                  <div class="s-label"><strong>Audio bitrate</strong><span>Bitrate for audio encoded by gpu-screen-recorder, in kbps.</span></div>
+                  <input type="number" id="s-gsr-ab" min="32" max="512" step="16" value="160">
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="s-label"><strong>Extra args</strong><span>Highest priority. Matching manual flags override the controls above. Do not add <code>-a</code>, <code>-o</code>, or <code>-r</code>.</span></div>
                 <input type="text" id="s-gsr-args" placeholder="-k hevc -bm cbr -q 20000 -fm cfr -a {default_sink_monitor}">
               </div>
               <div class="settings-row">

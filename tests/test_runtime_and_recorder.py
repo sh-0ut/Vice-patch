@@ -1442,7 +1442,7 @@ class RecorderAudioCommandTests(unittest.TestCase):
         audio_values = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-a"]
         self.assertEqual(audio_values, ["default_input"])
 
-    def test_gsr_build_cmd_mix_first_prepends_combined_track(self) -> None:
+    def test_gsr_build_cmd_mix_first_keeps_raw_tracks_for_postprocessing(self) -> None:
         recorder = GSRRecorder(
             Config(
                 output=OutputConfig(directory="/tmp/vice-test"),
@@ -1458,15 +1458,7 @@ class RecorderAudioCommandTests(unittest.TestCase):
         cmd = recorder._build_cmd()
 
         audio_values = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-a"]
-        self.assertEqual(
-            audio_values,
-            [
-                "default_output|app:Discord|default_input",
-                "default_output",
-                "app:Discord",
-                "default_input",
-            ],
-        )
+        self.assertEqual(audio_values, ["default_output", "app:Discord", "default_input"])
 
     def test_gsr_build_cmd_mix_first_skipped_for_single_track(self) -> None:
         recorder = GSRRecorder(

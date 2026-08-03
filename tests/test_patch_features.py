@@ -13,7 +13,8 @@ from aiohttp import web
 from vice.config import Config, RecordingConfig, clamp_recording_limits
 from vice.editor import Source, build_export_cmd, validate_project
 from vice.media import probe_media
-from vice.recorder import _apply_full_mix, _gsr_audio_args, _mix_gain, build_full_mix_cmd
+from vice.recorder import (_apply_full_mix, _gsr_advanced_args, _gsr_audio_args,
+                           _mix_gain, build_full_mix_cmd)
 from vice.share import (ShareServer, _trim_copy_path, _valid_trim_result,
                         audio_preview_cache_key)
 
@@ -123,6 +124,37 @@ class FullMixTests(unittest.TestCase):
         rc = self.rc(); rc.audio_track_mix_gains = {"device:mic": 9, "app:Zen": "bad"}
         self.assertEqual(_mix_gain(rc, "device:mic"), 2.0)
         self.assertEqual(_mix_gain(rc, "app:Zen"), 1.0)
+
+
+class GsrAdvancedSettingsTests(unittest.TestCase):
+    def test_disabled_emits_nothing(self):
+        self.assertEqual(_gsr_advanced_args(RecordingConfig(), []), [])
+
+    def test_cbr_fields_generate_flags(self):
+        rc = RecordingConfig(gsr_advanced_enabled=True, gsr_bitrate_mode="cbr",
+            gsr_video_bitrate=40000, gsr_framerate_mode="cfr", gsr_keyint=1,
+            gsr_tune="quality", gsr_audio_bitrate=192)
+        self.assertEqual(_gsr_advanced_args(rc, []), [
+            "-bm", "cbr", "-q", "40000", "-fm", "cfr", "-keyint", "1",
+            "-tune", "quality", "-ab", "192",
+        ])
+
+    def test_manual_extra_args_have_priority(self):
+        rc = RecordingConfig(gsr_advanced_enabled=True, gsr_bitrate_mode="cbr",
+            gsr_video_bitrate=40000, gsr_framerate_mode="cfr")
+        generated = _gsr_advanced_args(rc, ["-bm", "qp", "-q", "ultra", "-fm", "vfr"])
+        self.assertNotIn("-bm", generated)
+        self.assertNotIn("-q", generated)
+        self.assertNotIn("-fm", generated)
+
+    def test_invalid_values_are_clamped(self):
+        cfg = Config(recording=RecordingConfig(gsr_bitrate_mode="broken",
+            gsr_video_bitrate=999999, gsr_audio_bitrate=-1, gsr_keyint=0))
+        clamp_recording_limits(cfg)
+        self.assertEqual(cfg.recording.gsr_bitrate_mode, "qp")
+        self.assertEqual(cfg.recording.gsr_video_bitrate, 200000)
+        self.assertEqual(cfg.recording.gsr_audio_bitrate, 32)
+        self.assertEqual(cfg.recording.gsr_keyint, 0.1)
 
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg required")

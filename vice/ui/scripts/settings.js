@@ -72,6 +72,15 @@ function syncFormFromCfg() {
   syncVolumeRows();
   pick('s-wf-mic', r.wf_microphone_strategy ?? 'prompt');
   document.getElementById('s-gsr-args').value = r.gsr_args ?? '';
+  document.getElementById('s-gsr-advanced').checked = !!r.gsr_advanced_enabled;
+  pick('s-gsr-bm', r.gsr_bitrate_mode ?? 'qp');
+  pick('s-gsr-quality', r.gsr_quality ?? 'very_high');
+  document.getElementById('s-gsr-bitrate').value = r.gsr_video_bitrate ?? 40000;
+  pick('s-gsr-fm', r.gsr_framerate_mode ?? 'vfr');
+  document.getElementById('s-gsr-keyint').value = r.gsr_keyint ?? 2;
+  pick('s-gsr-tune', r.gsr_tune ?? 'performance');
+  document.getElementById('s-gsr-ab').value = r.gsr_audio_bitrate ?? 160;
+  syncGsrAdvancedRows();
   const clipKey = h.clip ?? 'KEY_F9';
   document.getElementById('s-key').value = clipKey;
   document.getElementById('s-key-btn').textContent = clipKey;
@@ -600,6 +609,20 @@ function resetAudioMixGains() {
   renderAudioTracks();
 }
 
+function syncGsrAdvancedRows() {
+  const enabled = !!document.getElementById('s-gsr-advanced')?.checked;
+  const fields = document.getElementById('s-gsr-advanced-fields');
+  if (fields) {
+    fields.style.opacity = enabled ? '' : '.45';
+    fields.querySelectorAll('input,select').forEach(el => { el.disabled = !enabled; });
+  }
+  const cbr = document.getElementById('s-gsr-bm')?.value === 'cbr';
+  const bitrate = document.getElementById('row-gsr-bitrate');
+  const quality = document.getElementById('row-gsr-quality');
+  if (bitrate) bitrate.style.display = cbr ? '' : 'none';
+  if (quality) quality.style.display = cbr ? 'none' : '';
+}
+
 async function saveSettings() {
   const resolution = resolvedResolution();
   if (resolution === false) {
@@ -641,6 +664,14 @@ async function saveSettings() {
       audio_track_mix_gains: {...audioMixGains},
       audio_track_names: {...audioTrackNames},
       gsr_args:        document.getElementById('s-gsr-args').value.trim(),
+      gsr_advanced_enabled: document.getElementById('s-gsr-advanced').checked,
+      gsr_bitrate_mode: document.getElementById('s-gsr-bm').value,
+      gsr_quality: document.getElementById('s-gsr-quality').value,
+      gsr_video_bitrate: +document.getElementById('s-gsr-bitrate').value,
+      gsr_framerate_mode: document.getElementById('s-gsr-fm').value,
+      gsr_keyint: +document.getElementById('s-gsr-keyint').value,
+      gsr_tune: document.getElementById('s-gsr-tune').value,
+      gsr_audio_bitrate: +document.getElementById('s-gsr-ab').value,
     },
     hotkeys: {
       clip: document.getElementById('s-key').value,
