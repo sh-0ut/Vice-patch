@@ -26,6 +26,7 @@ import shutil
 import struct
 import wave
 from pathlib import Path
+from .instance import RUNTIME_DIR
 from typing import Optional
 
 log = logging.getLogger("vice.audio")
@@ -123,7 +124,7 @@ def _wav_for(name: str, volume: float) -> bytes:
 # ── Playback ───────────────────────────────────────────────────────────────────
 
 # Stable temp paths so we never accumulate files
-_TMP_DIR = Path("/tmp/vice")
+_TMP_DIR = RUNTIME_DIR
 
 
 def _find_player() -> Optional[str]:

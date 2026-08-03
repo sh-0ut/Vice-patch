@@ -56,6 +56,8 @@ from .runtime import (
 from .share import ShareServer
 from . import audio
 from . import updates
+from .instance import (APP_CLI_NAME, APP_NAME, CLI_NAME, DATA_DIR, INSTANCE,
+                       RUNTIME_DIR, SERVICE_NAME)
 
 log = logging.getLogger("vice")
 
@@ -76,11 +78,11 @@ def _load_default_games() -> list[dict]:
 
 _DEFAULT_GAMES: list[dict] = _load_default_games()
 
-PID_FILE    = Path("/tmp/vice/vice.pid")
-SOCKET_FILE = Path("/tmp/vice/vice.sock")
+PID_FILE    = RUNTIME_DIR / f"{INSTANCE}.pid"
+SOCKET_FILE = RUNTIME_DIR / f"{INSTANCE}.sock"
 USER_BIN_DIR = actual_home_dir() / ".local" / "bin"
-INSTALL_VENV_DIR = actual_home_dir() / ".local" / "share" / "vice" / "venv"
-USER_DESKTOP_FILE = actual_home_dir() / ".local" / "share" / "applications" / "vice.desktop"
+INSTALL_VENV_DIR = DATA_DIR / "venv"
+USER_DESKTOP_FILE = actual_home_dir() / ".local" / "share" / "applications" / f"{INSTANCE}.desktop"
 USER_ICON_FILE = (
     actual_home_dir()
     / ".local"
@@ -89,9 +91,9 @@ USER_ICON_FILE = (
     / "hicolor"
     / "scalable"
     / "apps"
-    / "vice.svg"
+    / f"{INSTANCE}.svg"
 )
-DAEMON_LOG_FILE = actual_home_dir() / ".local" / "share" / "vice" / "vice.log"
+DAEMON_LOG_FILE = DATA_DIR / f"{INSTANCE}.log"
 
 # Consecutive unexpected recorder deaths before the watchdog starts backing
 # off. Two is normal turbulence (a driver reset, a suspend edge); a third in a
@@ -102,6 +104,25 @@ _RECORDER_DEATH_BACKOFF_AFTER = 3
 # Two samples must agree before the recorder is retargeted, so a switch costs
 # up to twice this.
 FOLLOW_MOUSE_INTERVAL = 2.0
+
+
+def _patch_recorder_conflict() -> Optional[str]:
+    """Refuse capture coexistence; never signal or otherwise alter the owner."""
+    if INSTANCE != "vice-patch":
+        return None
+    production_socket = Path("/tmp/vice/vice.sock")
+    if production_socket.exists():
+        return "production Vice appears to be running; stop vice.service manually first"
+    try:
+        found = subprocess.run(
+            ["pgrep", "-x", "gpu-screen-recorder"], capture_output=True, text=True,
+            timeout=2, check=False)
+        pids = [p for p in found.stdout.split() if p.isdigit() and int(p) != os.getpid()]
+        if pids:
+            return "another gpu-screen-recorder process is already running; it was not stopped"
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return None
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -150,7 +171,7 @@ class ViceDaemon:
         self._follow_mouse_task: Optional[asyncio.Task] = None
 
     async def run(self) -> None:
-        Path("/tmp/vice").mkdir(parents=True, exist_ok=True)
+        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
         out_dir = resolve_path(self.cfg.output.directory)
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
@@ -202,6 +223,9 @@ class ViceDaemon:
         try:
             await self.hotkeys.start()
             self.hotkeys_available = self.hotkeys.available
+            conflict = _patch_recorder_conflict()
+            if conflict:
+                raise RuntimeError(f"Vice Patch recorder refused to start: {conflict}")
             await self.recorder.start()
             self._ready = True
         except Exception as exc:
@@ -1337,7 +1361,7 @@ def doctor() -> None:
     vice_app_cmd = shutil.which("vice-app") or "(not found)"
     package_file = Path(sys.modules["vice"].__file__).resolve()
     systemd_env = user_systemd_env_snapshot()
-    service_file = actual_home_dir() / ".config" / "systemd" / "user" / "vice.service"
+    service_file = actual_home_dir() / ".config" / "systemd" / "user" / SERVICE_NAME
     running_status = asyncio.run(_ipc("status"))
 
     click.echo("Vice doctor")
@@ -1480,7 +1504,7 @@ def uninstall(yes: bool) -> None:
         asyncio.run(_ipc("stop"))
 
     # 2. Disable systemd user service
-    service = actual_home_dir() / ".config" / "systemd" / "user" / "vice.service"
+    service = actual_home_dir() / ".config" / "systemd" / "user" / SERVICE_NAME
     if service.exists():
         if yes or click.confirm("Disable and remove the systemd user service?", default=True):
             subprocess.run(

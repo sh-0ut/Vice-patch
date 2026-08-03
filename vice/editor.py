@@ -30,11 +30,11 @@ from typing import Awaitable, Callable, Optional
 from importlib.resources import files as _pkg_files
 
 from .recorder import slugify_clip_name
-from .runtime import actual_home_dir
+from .instance import DATA_DIR
 
 log = logging.getLogger("vice.editor")
 
-PROJECT_PATH = actual_home_dir() / ".local" / "share" / "vice" / "editor_project.json"
+PROJECT_PATH = DATA_DIR / "editor_project.json"
 
 # Transition fx ids shared with the UI. xfade covers most; dipaccent has no
 # xfade equivalent and is rendered as color fades around a hard cut.
@@ -95,6 +95,7 @@ class Source:
     width: int
     height: int
     has_audio: bool
+    audio_streams: int = 1
 
 
 # ── validation ───────────────────────────────────────────────────────────────
@@ -178,6 +179,21 @@ def validate_project(raw: dict, sources: dict[str, Source]) -> tuple[dict, list[
                 continue
             out["clipId"] = cid
             out["offset"] = offset
+            if kind == "audio":
+                try:
+                    stream_index = max(0, int(it.get("audioStreamIndex", 0)))
+                except (TypeError, ValueError):
+                    stream_index = 0
+                try:
+                    volume = float(it.get("volume", 1.0))
+                except (TypeError, ValueError):
+                    volume = 1.0
+                out["audioStreamIndex"] = stream_index
+                out["volume"] = max(0.0, min(volume, 2.0))
+                out["muted"] = bool(it.get("muted", False))
+                if stream_index >= src.audio_streams:
+                    errors.append(f"item {iid}: audio stream {stream_index} does not exist in {cid}")
+                    continue
             if kind == "clip":
                 out["muted"] = bool(it.get("muted", False))
                 trans = it.get("trans")
@@ -547,17 +563,20 @@ def build_export_cmd(project: dict, sources: dict[str, Source], out_path: Path,
     # silent anchor that pins the output length.
     contribs = [it for it in project["items"]
                 if it.get("clipId") and sources[it["clipId"]].has_audio
-                and (it["kind"] == "audio"
+                and ((it["kind"] == "audio" and not it.get("muted"))
                      or (it["kind"] == "clip" and not it.get("muted")))]
     contribs.sort(key=lambda i: (i["start"], i["id"]))
     lines.append(f"anullsrc=r={AUDIO_RATE}:cl=stereo,atrim=0:{_n(extent)}[ab]")
     alabels = ["ab"]
     for k, it in enumerate(contribs):
+        gain_filter = (f"volume={_n(max(0.0, min(float(it.get('volume', 1.0)), 2.0)))},"
+                       if it["kind"] == "audio" else "")
         lines.append(
-            f"[{input_idx[it['clipId']]}:a:0]"
+            f"[{input_idx[it['clipId']]}:a:{int(it.get('audioStreamIndex', 0)) if it['kind'] == 'audio' else 0}]"
             f"atrim=start={_n(it['offset'])}:end={_n(it['offset'] + it['dur'])},"
             f"asetpts=PTS-STARTPTS,"
             f"aformat=sample_rates={AUDIO_RATE}:channel_layouts=stereo,"
+            f"{gain_filter}"
             f"adelay={round(it['start'] * 1000)}:all=1[a{k}]")
         alabels.append(f"a{k}")
     if len(alabels) == 1:

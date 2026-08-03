@@ -38,17 +38,18 @@ from urllib.request import urlopen
 
 from . import __version__
 from .runtime import actual_home_dir, normalize_runtime_environment
+from .instance import APP_NAME, CLI_NAME, DATA_DIR, INSTANCE, RUNTIME_DIR
 
-SOCKET_FILE = Path("/tmp/vice/vice.sock")
-PID_FILE    = Path("/tmp/vice/vice.pid")
-WINDOW_TITLE = "Vice"
-LOG_FILE = actual_home_dir() / ".local" / "share" / "vice" / "vice-app.log"
-DEBUG_LOG_FILE = actual_home_dir() / ".local" / "share" / "vice" / "vice-debug.log"
-DAEMON_LOG_FILE = actual_home_dir() / ".local" / "share" / "vice" / "vice.log"
-DAEMON_STDERR_LOG_FILE = actual_home_dir() / ".local" / "share" / "vice" / "vice-daemon-stderr.log"
+SOCKET_FILE = RUNTIME_DIR / f"{INSTANCE}.sock"
+PID_FILE    = RUNTIME_DIR / f"{INSTANCE}.pid"
+WINDOW_TITLE = APP_NAME
+LOG_FILE = DATA_DIR / f"{INSTANCE}-app.log"
+DEBUG_LOG_FILE = DATA_DIR / f"{INSTANCE}-debug.log"
+DAEMON_LOG_FILE = DATA_DIR / f"{INSTANCE}.log"
+DAEMON_STDERR_LOG_FILE = DATA_DIR / f"{INSTANCE}-daemon-stderr.log"
 # vice-app's own stderr (Qt/Chromium messages), captured by the compositor
 # watcher so launcher-context failures are diagnosable. Truncated per launch.
-APP_STDERR_LOG_FILE = actual_home_dir() / ".local" / "share" / "vice" / "vice-app-stderr.log"
+APP_STDERR_LOG_FILE = DATA_DIR / f"{INSTANCE}-app-stderr.log"
 
 DEBUG_MODE = False  # toggled by main() when --debug is on the command line.
 
@@ -105,10 +106,10 @@ def _vice_cmd() -> list[str]:
       2. shutil.which("vice")        (works if PATH is set correctly)
       3. sys.executable -m vice.main (fallback using same Python as vice-app)
     """
-    user_bin = actual_home_dir() / ".local" / "bin" / "vice"
+    user_bin = actual_home_dir() / ".local" / "bin" / CLI_NAME
     if user_bin.exists():
         return [str(user_bin)]
-    found = shutil.which("vice")
+    found = shutil.which(CLI_NAME)
     if found:
         return [found]
     # Last resort: run as a module with the same Python interpreter
@@ -166,8 +167,12 @@ def _start_daemon() -> None:
     # happen before the daemon's logging is initialised, leaving vice.log empty)
     # are still recoverable for the launch error dialog. Truncated each launch
     # so the file always reflects the most recent attempt.
-    DAEMON_STDERR_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    stderr_fd = open(DAEMON_STDERR_LOG_FILE, "w")
+    try:
+        DAEMON_STDERR_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        stderr_fd = open(DAEMON_STDERR_LOG_FILE, "w")
+    except OSError:
+        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        stderr_fd = open(RUNTIME_DIR / f"{INSTANCE}-daemon-stderr.log", "w")
     try:
         subprocess.Popen(
             cmd,
@@ -439,7 +444,7 @@ def main() -> None:
         port = cfg.sharing.port
     except Exception as exc:
         log.error("Failed to load config: %s", exc)
-        port = 8765
+        port = 8875 if INSTANCE == "vice-patch" else 8765
 
     url = f"http://127.0.0.1:{port}/"
 
@@ -596,7 +601,7 @@ def _prepare_webview_environment() -> None:
     os.environ.setdefault("QT_LOGGING_TO_CONSOLE", "1")
 
     # Leftover from v1.2.2, which pinned software compositing here.
-    (actual_home_dir() / ".local" / "share" / "vice" / "webview-state.json").unlink(missing_ok=True)
+    (DATA_DIR / "webview-state.json").unlink(missing_ok=True)
 
     if _is_nvidia() and os.environ.get("WAYLAND_DISPLAY"):
         platform = os.environ.get("VICE_WEBVIEW_PLATFORM", "xcb")

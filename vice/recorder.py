@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 import re
 import shlex
@@ -35,7 +36,8 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from .config import Config
-from .media import get_duration as _get_duration
+from .media import get_duration as _get_duration, probe_media
+from .instance import RUNTIME_DIR
 from .runtime import recover_wayland_display, resolve_path
 
 log = logging.getLogger("vice.recorder")
@@ -296,13 +298,6 @@ def _gsr_audio_args(rc, *, split_for_volume: bool = True) -> list[str]:
             mic = _gsr_mic_source(rc)
             if not any(mic in track.split("|") for track in tracks):
                 tracks.append(mic)
-        if getattr(rc, "audio_tracks_mix_first", False) and len(tracks) > 1:
-            mix: list[str] = []
-            for track in tracks:
-                for part in track.split("|"):
-                    if part and part not in mix:
-                        mix.append(part)
-            tracks.insert(0, "|".join(mix))
         args: list[str] = []
         for track in tracks:
             args += ["-a", track]
@@ -1217,6 +1212,9 @@ class Recorder(ABC):
             log.error("Session file not found after stop: %s (%s)", path, detail)
             return None
 
+        if not await _apply_full_mix(path, self.cfg.recording):
+            log.error("Session Full Mix failed; preserving raw clip without announcing it")
+            return None
         if self.cfg.recording.apply_watermark:
             await _apply_watermark(path)
         log.info("Session clip saved: %s", path)
@@ -1693,6 +1691,114 @@ async def _apply_volume_mix(path: Path, rc) -> None:
     tmp.replace(path)
 
 
+def _mix_gain(rc, source: str) -> float:
+    raw = (getattr(rc, "audio_track_mix_gains", None) or {}).get(source, 1.0)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        log.warning("Invalid Full Mix gain for %s: %r; using 1.0", source, raw)
+        value = 1.0
+    if not math.isfinite(value):
+        value = 1.0
+    return max(0.0, min(value, 2.0))
+
+
+def _track_title(rc, source: str, index: int) -> str:
+    configured = (getattr(rc, "audio_track_names", None) or {}).get(source)
+    if configured:
+        return str(configured)[:120]
+    if source.startswith("app-inverse:"):
+        return "Game + Discord"
+    if source.startswith("app:"):
+        return f"Browser — {source.split(':', 1)[1]}"
+    if _classify_gsr_source(source) == "input":
+        return "Microphone — " + source.rsplit(".", 1)[-1].replace("-fallback", "")
+    return f"Audio source {index + 1}"
+
+
+def build_full_mix_cmd(path: Path, tmp: Path, rc, *, encode_raw: bool = False) -> list[str]:
+    configured = [str(t).strip() for t in (getattr(rc, "audio_tracks", None) or []) if str(t).strip()]
+    # A leading pipe-combined source is a reliable GSR fallback Full Mix. It
+    # is replaced from the following raw streams after save, not mixed again.
+    input_offset = 1 if configured and "|" in configured[0] else 0
+    tracks = configured[input_offset:]
+    chains, labels = [], []
+    for i, source in enumerate(tracks):
+        label = f"raw{i}"
+        chains.append(
+            f"[0:a:{i + input_offset}]aformat=sample_rates=48000:channel_layouts=stereo,"
+            f"volume={_mix_gain(rc, source)}[{label}]"
+        )
+        labels.append(f"[{label}]")
+    chains.append("".join(labels) +
+                  f"amix=inputs={len(labels)}:duration=longest:normalize=0:dropout_transition=0[fullmix]")
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(path),
+           "-filter_complex", ";".join(chains), "-map", "0:v:0", "-map", "[fullmix]"]
+    for i in range(len(tracks)):
+        cmd += ["-map", f"0:a:{i + input_offset}"]
+    cmd += ["-c:v", "copy", "-c:a:0", "aac", "-b:a:0", "192k"]
+    for output_index in range(1, len(tracks) + 1):
+        cmd += [f"-c:a:{output_index}", "aac" if encode_raw else "copy"]
+        if encode_raw:
+            cmd += [f"-b:a:{output_index}", "192k"]
+    titles = ["Full Mix"] + [_track_title(rc, source, i) for i, source in enumerate(tracks)]
+    for i, title in enumerate(titles):
+        cmd += [f"-metadata:s:a:{i}", f"title={title}"]
+        cmd += [f"-metadata:s:a:{i}", f"handler_name={title}"]
+    if tmp.suffix.lower() == ".mp4":
+        cmd += ["-movflags", "+faststart"]
+    cmd += ["-y", str(tmp)]
+    return cmd
+
+
+async def _apply_full_mix(path: Path, rc) -> bool:
+    configured = [str(t).strip() for t in (getattr(rc, "audio_tracks", None) or []) if str(t).strip()]
+    if not getattr(rc, "audio_tracks_mix_first", False) or not configured:
+        return True
+    has_fallback_mix = "|" in configured[0]
+    tracks = configured[1:] if has_fallback_mix else configured
+    original = await probe_media(path)
+    expected_input_streams = len(tracks) + (1 if has_fallback_mix else 0)
+    if not original or original.get("audio_streams") != expected_input_streams:
+        # raw_count+1 with title is the idempotent completed state.
+        info = (original or {}).get("audio_stream_info", [])
+        if len(info) == len(tracks) + 1 and info[0].get("title") == "Full Mix":
+            return True
+        log.error("Full Mix skipped for %s: expected %d raw streams, found %s",
+                  path.name, len(tracks), (original or {}).get("audio_streams"))
+        return bool(has_fallback_mix and original and original.get("audio_streams") == expected_input_streams)
+    tmp = path.with_name(f".{path.stem}.fullmix.tmp{path.suffix}")
+    for encode_raw in (False, True):
+        tmp.unlink(missing_ok=True)
+        cmd = build_full_mix_cmd(path, tmp, rc, encode_raw=encode_raw)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+        except (asyncio.TimeoutError, OSError) as exc:
+            log.error("Full Mix processing failed for %s: %s", path.name, exc)
+            continue
+        if proc.returncode != 0:
+            log.warning("Full Mix %s pass failed for %s: %s",
+                        "AAC fallback" if encode_raw else "stream-copy", path.name,
+                        stderr.decode(errors="replace").strip()[-1000:])
+            continue
+        result = await probe_media(tmp)
+        expected = len(tracks) + 1
+        duration_ok = bool(result and original.get("duration", 0) > 0 and
+                           abs(result.get("duration", 0) - original["duration"]) <= max(1.0, original["duration"] * .03))
+        info = (result or {}).get("audio_stream_info", [])
+        if (result and result.get("width", 0) > 0 and result.get("audio_streams") == expected
+                and duration_ok and info and info[0].get("title") == "Full Mix"):
+            os.replace(tmp, path)
+            return True
+        log.error("Full Mix validation failed for %s: %r", path.name, result)
+    tmp.unlink(missing_ok=True)
+    # With a pre-recorded combined stream, failure is degraded but safe: keep
+    # and announce that valid fallback rather than hiding a playable clip.
+    return has_fallback_mix
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # gpu-screen-recorder backend
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1864,6 +1970,9 @@ class GSRRecorder(Recorder):
                 # GSR saves the entire buffer; trim to the requested clip duration.
                 trimmed = await _trim_to_last_n_seconds(newest, clip_duration)
                 await _apply_volume_mix(trimmed, self.cfg.recording)
+                if not await _apply_full_mix(trimmed, self.cfg.recording):
+                    log.error("Full Mix failed; preserving raw clip without announcing it")
+                    return None
                 if self.cfg.recording.apply_watermark:
                     await _apply_watermark(trimmed)
                 log.info("Clip saved: %s", trimmed)
@@ -1895,7 +2004,7 @@ class SegmentRecorder(Recorder):
     def __init__(self, cfg: Config, use_wf_recorder: bool) -> None:
         super().__init__(cfg)
         self._use_wf = use_wf_recorder
-        self._seg_dir = Path("/tmp/vice/segs")
+        self._seg_dir = RUNTIME_DIR / "segs"
         self._seg_dir.mkdir(parents=True, exist_ok=True)
         self._seg_index = 0
         self._segments: list[tuple[float, Path]] = []  # (start_time, path)
@@ -2131,7 +2240,7 @@ class SegmentRecorder(Recorder):
         )
 
         # Write concat list for ffmpeg
-        concat_list = Path("/tmp/vice/concat.txt")
+        concat_list = RUNTIME_DIR / "concat.txt"
         with concat_list.open("w") as fh:
             for _, seg in relevant:
                 fh.write(f"file '{seg}'\n")

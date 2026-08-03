@@ -61,15 +61,26 @@ async def probe_media(path: Path) -> Optional[dict]:
     duration = _parse_duration(data.get("format", {}).get("duration"))
     if duration <= 0:
         duration = _parse_duration(video.get("duration"))
-    audio_streams = sum(
-        1 for s in data.get("streams", []) if s.get("codec_type") == "audio"
-    )
+    audio_stream_info = []
+    for relative_index, stream in enumerate(
+            s for s in data.get("streams", []) if s.get("codec_type") == "audio"):
+        tags = stream.get("tags") or {}
+        audio_stream_info.append({
+            "index": relative_index,
+            "stream_index": int(stream.get("index", relative_index)),
+            "codec": (stream.get("codec_name") or "").lower(),
+            "channels": int(stream.get("channels") or 0),
+            "channel_layout": stream.get("channel_layout") or "",
+            "title": tags.get("title") or tags.get("handler_name") or "",
+            "language": tags.get("language") or "",
+        })
     return {
         "width": int(video.get("width") or 0),
         "height": int(video.get("height") or 0),
         "duration": duration,
         "vcodec": (video.get("codec_name") or "").lower(),
-        "audio_streams": audio_streams,
+        "audio_streams": len(audio_stream_info),
+        "audio_stream_info": audio_stream_info,
     }
 
 

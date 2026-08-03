@@ -284,6 +284,13 @@
               </div>
             </div>
 
+            <div id="ed-audio-inspector" class="ed-inspector" hidden>
+              <div class="ed-insp-label">Volume <span id="ed-audio-volume-val" class="mono">100%</span></div>
+              <input type="range" class="ed-insp-range" id="ed-audio-volume" min="0" max="200" step="1" oninput="edAudioVolumeChange(this.value / 100)">
+              <button class="ed-btn" onclick="edAudioMuteToggle()">Mute</button>
+              <button class="ed-btn" onclick="edAudioVolumeChange(1)">Reset to 100%</button>
+              <span class="ed-insp-pos">Project volume only; the source clip is unchanged.</span>
+            </div>
             <div id="ed-inspector" hidden>
               <div class="ed-insp-hd">
                 <span class="eyebrow-label">TITLE</span>
@@ -600,8 +607,13 @@
               </div>
 
               <div class="settings-row">
-                <div class="s-label"><strong>Combined first track</strong><span>Record an extra track 1 that mixes every source, so players and shared clips carry full audio. Your separate tracks start at 2.</span></div>
+                <div class="s-label"><strong>Enable Full Mix</strong><span>Create playback stream 1 after saving. Gains affect only Full Mix and only newly saved clips.</span></div>
                 <label class="toggle"><input type="checkbox" id="s-track-mix" onchange="renderAudioTracks()"><span class="toggle-track"></span></label>
+              </div>
+              <div class="settings-row settings-row-stack" id="s-mix-gains-row">
+                <div class="s-label"><strong>Full Mix gains</strong><span>0–200%. Raw streams remain unchanged.</span></div>
+                <div id="s-mix-gains" class="track-list"></div>
+                <button class="btn-pill btn-ghost-pill" type="button" onclick="resetAudioMixGains()">Reset to 100%</button>
               </div>
 
               <div class="settings-row">

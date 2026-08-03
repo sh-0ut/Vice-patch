@@ -127,7 +127,7 @@ async function saveTrim() {
     });
     const data = await r.json();
     if (data.ok) {
-      toast('Clip trimmed and saved!', 'ok');
+      toast(`Trimmed copy saved as ${data.name || data.slug}`, 'ok');
       closeTrim();
       await fetchClips();
     } else {

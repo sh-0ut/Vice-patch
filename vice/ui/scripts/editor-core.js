@@ -111,6 +111,13 @@ async function edLoad() {
   } catch (_) {
     edProject = edProject || edDefaultProject();
   }
+  edProject.items.forEach(it => {
+    if (it.kind === 'audio') {
+      it.audioStreamIndex = Math.max(0, Number.parseInt(it.audioStreamIndex ?? 0, 10) || 0);
+      it.volume = Math.max(0, Math.min(2, Number(it.volume ?? 1) || 0));
+      it.muted = !!it.muted;
+    }
+  });
   edLoaded = true;
 }
 
@@ -312,17 +319,35 @@ function edDetachAudio() {
   const c = edClipOf(it);
   if (!c) return;
   edBegin();
-  let a = edProject.tracks.find(t => t.type === 'audio');
-  if (!a) {
-    a = { id: edUid(), type: 'audio', label: 'A1' };
-    edProject.tracks.push(a);
-  }
+  const streams = Array.isArray(c.audio_stream_info) ? c.audio_stream_info :
+    Array.from({ length: Math.max(1, c.audio_streams || 1) }, (_, index) => ({ index }));
+  const existing = new Set(edProject.items.filter(x =>
+    x.kind === 'audio' && x.clipId === it.clipId &&
+    Math.abs(x.start - it.start) < .001 && Math.abs((x.offset || 0) - (it.offset || 0)) < .001
+  ).map(x => Number(x.audioStreamIndex ?? 0)));
   it.muted = true;
-  const audio = edInsert({
-    id: edUid(), kind: 'audio', trackId: a.id, clipId: it.clipId,
-    start: it.start, dur: it.dur, offset: it.offset || 0,
+  let last = null;
+  streams.forEach((stream, index) => {
+    const streamIndex = Number(stream.index ?? index);
+    if (existing.has(streamIndex)) return;
+    let track = edProject.tracks.filter(t => t.type === 'audio')[index];
+    const title = stream.title || `Stream ${streamIndex + 1}`;
+    if (!track) {
+      track = { id: edUid(), type: 'audio', label: `A${index + 1} \u2014 ${title}` };
+      edProject.tracks.push(track);
+    } else if (!track.label.includes('\u2014')) {
+      track.label = `A${index + 1} \u2014 ${title}`;
+    }
+    // Option B: Full Mix (identified by stream 0/title) is muted when raw
+    // streams are also present, preventing accidental double playback.
+    last = edInsert({
+      id: edUid(), kind: 'audio', trackId: track.id, clipId: it.clipId,
+      start: it.start, dur: it.dur, offset: it.offset || 0,
+      audioStreamIndex: streamIndex, volume: 1.0,
+      muted: streams.length > 1 && streamIndex === 0 && /full mix/i.test(title),
+    });
   });
-  edSel = audio.id;
+  if (last) edSel = last.id;
   edCommit();
 }
 

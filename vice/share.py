@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import glob
+import hashlib
 import html
 import json
 import logging
@@ -48,6 +49,7 @@ from .playlists import PlaylistStore, build_tag_index
 from .recorder import (KEEP_ALL_STREAMS, list_display_options,
                        list_gsr_audio_sources, slugify_clip_name)
 from .runtime import actual_home_dir, resolve_path
+from .instance import CACHE_DIR, DATA_DIR
 
 log = logging.getLogger("vice.share")
 UI_VERSION_TOKEN = "__VICE_VERSION__"
@@ -152,12 +154,13 @@ def _resolve_ui_asset(kind: str, name: str) -> Path | None:
     return None
 
 # Thumbnails go in the cache dir — separate from the clip files.
-THUMB_DIR      = actual_home_dir() / ".cache" / "vice" / "thumbs"
+THUMB_DIR      = CACHE_DIR / "thumbs"
 # H.264 preview copies of clips the native WebEngine can't decode (H.265).
-PROXY_DIR      = actual_home_dir() / ".cache" / "vice" / "proxies"
+PROXY_DIR      = CACHE_DIR / "proxies"
+AUDIO_PREVIEW_DIR = CACHE_DIR / "editor-audio"
 # Scratch space for editor export jobs (drawtext sidecar files).
-EXPORT_WORK_DIR = actual_home_dir() / ".cache" / "vice" / "exports"
-HIGHLIGHTS_DIR = actual_home_dir() / ".local" / "share" / "vice" / "highlights"
+EXPORT_WORK_DIR = CACHE_DIR / "exports"
+HIGHLIGHTS_DIR = DATA_DIR / "highlights"
 
 
 def _load_highlights(slug: str) -> list:
@@ -179,7 +182,7 @@ def _save_highlights(slug: str, highlights: list) -> None:
 # In-app view counts per slug. Like playlist membership, the counters are
 # migrated on rename and dropped on delete so a reused clip number never
 # inherits another clip's history.
-VIEWS_PATH = actual_home_dir() / ".local" / "share" / "vice" / "views.json"
+VIEWS_PATH = DATA_DIR / "views.json"
 
 
 def _load_views() -> dict[str, int]:
@@ -204,7 +207,7 @@ def _save_views(views: dict[str, int]) -> None:
 # Small bag of UI state that must outlive the web view. The native window's
 # localStorage does not reliably survive restarts on every QtWebEngine build,
 # which made the first-run tutorial reappear every launch.
-APP_STATE_PATH = actual_home_dir() / ".local" / "share" / "vice" / "ui_state.json"
+APP_STATE_PATH = DATA_DIR / "ui_state.json"
 
 
 def _load_app_state() -> dict:
@@ -249,6 +252,14 @@ def _proxy_path(path: Path) -> Path:
     except OSError:
         key = path.stem
     return PROXY_DIR / f"{key}.mp4"
+
+
+def audio_preview_cache_key(path: Path, stream_index: int) -> str:
+    """Content identity for one browser-compatible detached audio stream."""
+    canonical = path.resolve(strict=True)
+    st = canonical.stat()
+    raw = f"{canonical}\0{st.st_size}\0{st.st_mtime_ns}\0{stream_index}"
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 def _purge_slug_proxies(slug: str) -> None:
@@ -395,6 +406,31 @@ async def _ffprobe(path: Path) -> dict:
     return meta or dict(_PROBE_DEFAULTS)
 
 
+def _trim_copy_path(source: Path) -> Path:
+    """Return a collision-free sibling name without ever targeting source."""
+    base = source.with_name(f"{source.stem}-trimmed{source.suffix}")
+    if not base.exists():
+        return base
+    for number in range(2, 10_000):
+        candidate = source.with_name(
+            f"{source.stem}-trimmed-{number}{source.suffix}")
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError("too many trimmed copies with the same name")
+
+
+def _valid_trim_result(source_meta: dict, result_meta: Optional[dict], requested: float,
+                       result_size: int) -> bool:
+    """Reject tiny/one-frame outputs before they can be announced as clips."""
+    if not result_meta or result_meta.get("width", 0) <= 0 or result_size < 4096:
+        return False
+    duration = float(result_meta.get("duration", 0) or 0)
+    if duration < max(0.1, requested * 0.5) or duration > requested + 2.0:
+        return False
+    source_audio = int(source_meta.get("audio_streams", 0) or 0)
+    return int(result_meta.get("audio_streams", 0) or 0) >= source_audio
+
+
 async def _make_thumb(path: Path, duration: float = 0.0) -> Path:
     """Lazily generate a 640px-wide JPEG thumbnail stored in THUMB_DIR.
 
@@ -490,6 +526,7 @@ class ShareServer:
         # One lock per proxy path so two opens of the same H.265 clip don't
         # transcode it twice.
         self._proxy_locks: dict[str, asyncio.Lock] = {}
+        self._audio_preview_locks: dict[str, asyncio.Lock] = {}
 
         self._tunnel_proc: Optional[asyncio.subprocess.Process] = None
         self._tunnel_url:  Optional[str] = None
@@ -529,6 +566,7 @@ class ShareServer:
         # Media
         r.add_get("/v/{slug}",    self._video)
         r.add_get("/t/{slug}",    self._thumb)
+        r.add_get("/api/editor/audio/{slug}/{stream_index}", self._editor_audio_stream)
 
         # REST
         r.add_get("/api/clips",              self._api_clips)
@@ -744,6 +782,8 @@ class ShareServer:
             # Lets the UI request an H.264 preview proxy for codecs the native
             # WebEngine can't decode (H.265).
             "vcodec":     meta.get("vcodec",   ""),
+            "audio_streams": meta.get("audio_streams", 0),
+            "audio_stream_info": meta.get("audio_stream_info", []),
             # Keep share links public, but serve media via local relative URLs
             # so the app UI never fetches video through an external tunnel.
             "share_url":  f"{public_base}/c/{enc}",
@@ -935,6 +975,55 @@ class ShareServer:
         meta = await self._get_meta(slug, path)
         return web.json_response(self._clip_json(slug, path, meta))
 
+    async def _editor_audio_stream(self, req: web.Request) -> web.StreamResponse:
+        # Resolve only through the in-memory registry: request data is never
+        # interpreted as a filesystem path.
+        slug = req.match_info.get("slug", "")
+        path = self._clips.get(slug)
+        if path is None:
+            raise web.HTTPNotFound(text="unknown clip")
+        try:
+            stream_index = int(req.match_info.get("stream_index", ""))
+        except ValueError:
+            raise web.HTTPBadRequest(text="invalid audio stream index")
+        meta = await self._get_meta(slug, path)
+        streams = meta.get("audio_stream_info") or []
+        if stream_index < 0 or stream_index >= len(streams):
+            raise web.HTTPNotFound(text="audio stream does not exist")
+        try:
+            key = audio_preview_cache_key(path, stream_index)
+        except OSError:
+            raise web.HTTPNotFound(text="clip is unavailable")
+        AUDIO_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+        cached = AUDIO_PREVIEW_DIR / f"{key}.webm"
+        lock = self._audio_preview_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            if not cached.exists():
+                tmp = AUDIO_PREVIEW_DIR / f".{key}.{id(lock)}.tmp.webm"
+                cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
+                       "-i", str(path), "-map", f"0:a:{stream_index}", "-vn",
+                       "-c:a", "libopus", "-b:a", "128k", "-y", str(tmp)]
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd, stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.PIPE)
+                    _, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
+                    if proc.returncode != 0 or not tmp.exists():
+                        detail = stderr.decode(errors="replace").strip()[-500:]
+                        log.error("audio preview failed for %s stream %d: %s",
+                                  path.name, stream_index, detail)
+                        tmp.unlink(missing_ok=True)
+                        raise web.HTTPInternalServerError(text="audio preview conversion failed")
+                    tmp.replace(cached)
+                except asyncio.TimeoutError:
+                    tmp.unlink(missing_ok=True)
+                    log.error("audio preview timed out for %s stream %d", path.name, stream_index)
+                    raise web.HTTPGatewayTimeout(text="audio preview conversion timed out")
+                except FileNotFoundError:
+                    tmp.unlink(missing_ok=True)
+                    raise web.HTTPServiceUnavailable(text="ffmpeg is unavailable")
+        return web.FileResponse(cached, headers={"Cache-Control": "private, max-age=31536000, immutable"})
+
     async def _api_delete(self, req: web.Request) -> web.Response:
         slug = req.match_info["slug"]
         path = self._clips.pop(slug, None)
@@ -965,8 +1054,24 @@ class ShareServer:
         if end <= start:
             return web.json_response({"ok": False, "error": "end must be after start"})
 
+        source_meta = await probe_media(path)
+        if not source_meta or source_meta.get("duration", 0) <= 0:
+            return web.json_response({
+                "ok": False,
+                "error": "source clip is unreadable; trim was not attempted and the original was preserved",
+            }, status=422)
+        if start < 0 or end > source_meta["duration"] + 0.1:
+            return web.json_response({
+                "ok": False, "error": "trim range is outside the source duration",
+            }, status=400)
+
         ext = path.suffix.lstrip(".") or "mp4"
-        tmp = path.with_suffix(f".trimming.{ext}")
+        try:
+            destination = _trim_copy_path(path)
+        except RuntimeError as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=409)
+        tmp = destination.with_name(
+            f".{destination.stem}.trimming{destination.suffix}")
         cmd = [
             "ffmpeg", "-hide_banner", "-loglevel", "error",
             "-ss", str(start), "-i", str(path),
@@ -990,13 +1095,34 @@ class ShareServer:
             tmp.unlink(missing_ok=True)
             return web.json_response({"ok": False, "error": "ffmpeg timed out"})
 
-        tmp.replace(path)
-        # Clear cached thumbnail and metadata so they regenerate on next access
-        _purge_slug_thumbs(slug)
-        _purge_slug_proxies(slug)
-        self._meta.pop(slug, None)
-        asyncio.create_task(self._broadcast_clip(slug, path))
-        return web.json_response({"ok": True, "slug": slug})
+        result_meta = await probe_media(tmp)
+        try:
+            result_size = tmp.stat().st_size
+        except OSError:
+            result_size = 0
+        requested = end - start
+        if not _valid_trim_result(source_meta, result_meta, requested, result_size):
+            tmp.unlink(missing_ok=True)
+            log.error(
+                "Rejected invalid trim copy for %s (requested=%.3fs, source=%r, result=%r, size=%d); original preserved",
+                path.name, requested, source_meta, result_meta, result_size,
+            )
+            return web.json_response({
+                "ok": False,
+                "error": "FFmpeg produced an invalid trim; the original was preserved",
+            }, status=422)
+
+        # Publish only the validated copy. The source path is never renamed,
+        # unlinked, truncated, or replaced by the trim endpoint.
+        tmp.replace(destination)
+        new_slug = destination.stem
+        self._clips[new_slug] = destination
+        self._meta[new_slug] = result_meta
+        asyncio.create_task(self._broadcast_clip(new_slug, destination))
+        return web.json_response({
+            "ok": True, "slug": new_slug, "source_slug": slug,
+            "name": destination.name, "copied": True,
+        })
 
     async def _api_rename(self, req: web.Request) -> web.Response:
         slug = req.match_info["slug"]
@@ -1293,6 +1419,7 @@ class ShareServer:
                 width=meta.get("width", 0),
                 height=meta.get("height", 0),
                 has_audio=meta.get("audio_streams", 0) > 0,
+                audio_streams=meta.get("audio_streams", 0),
             )
         return sources
 

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import math
+import os
 import sys
 from pathlib import Path
 from dataclasses import dataclass, field, fields, asdict
@@ -21,8 +23,8 @@ else:
 import tomli_w
 
 from .runtime import actual_home_dir, resolve_path
+from .instance import CONFIG_DIR, default_output_directory
 
-CONFIG_DIR = actual_home_dir() / ".config" / "vice"
 CONFIG_PATH = CONFIG_DIR / "config.toml"
 CLIP_DURATION_MIN = 5
 CLIP_DURATION_MAX = 1800
@@ -146,6 +148,11 @@ class RecordingConfig:
     # mixes every source. Players, Discord, and share embeds play track 1, so
     # this keeps shared clips complete while the separates stay editable.
     audio_tracks_mix_first: bool = False
+    # Per-source gain used only by the post-save Full Mix. Raw tracks are not
+    # attenuated. Keys are the exact recording.audio_tracks source strings.
+    audio_track_mix_gains: dict[str, float] = field(default_factory=dict)
+    # Optional friendly titles, keyed by exact audio source string.
+    audio_track_names: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -171,7 +178,7 @@ class HotkeyConfig:
 
 @dataclass
 class OutputConfig:
-    directory: str = str(actual_home_dir() / "Videos" / "Vice")
+    directory: str = str(default_output_directory())
     filename_format: str = "vice_%Y%m%d_%H%M%S.mp4"
     # Append the detected game to clip filenames (Vice_Clip_4_Overwatch-2.mp4).
     # Uses the same curated games list as Discord Rich Presence; clips save
@@ -189,11 +196,11 @@ class OutputConfig:
 @dataclass
 class SharingConfig:
     enabled: bool = True
-    port: int = 8765
+    port: int = 8875 if os.environ.get("VICE_INSTANCE") == "vice-patch" else 8765
     # Port for the public share-only server. Defaults to sharing.port + 1.
     public_port: Optional[int] = None
     # Expose via a Cloudflare quick tunnel (requires the cloudflared binary).
-    cloudflare_tunnel: bool = True
+    cloudflare_tunnel: bool = os.environ.get("VICE_INSTANCE") != "vice-patch"
     # Override the public base URL shown in share links (e.g. if behind reverse proxy).
     base_url: Optional[str] = None
     # Accent color for share-page embeds (Discord sidebar strip etc.).
@@ -228,7 +235,7 @@ class DiscordConfig:
 class UpdatesConfig:
     # Ask GitHub once a day whether a newer release exists. Nothing is sent
     # about the user or their clips; turning this off stops the request.
-    check_on_start: bool = True
+    check_on_start: bool = os.environ.get("VICE_INSTANCE") != "vice-patch"
 
 
 @dataclass
@@ -409,6 +416,22 @@ def clamp_recording_limits(cfg: Config) -> None:
             log.warning("recording.%s=%r is not a number — using 1.0", name, getattr(rc, name))
             volume = 1.0
         setattr(rc, name, max(0.0, min(volume, 2.0)))
+
+    gains = getattr(rc, "audio_track_mix_gains", {})
+    if not isinstance(gains, dict):
+        log.warning("recording.audio_track_mix_gains must be a table — using defaults")
+        gains = {}
+    clean_gains: dict[str, float] = {}
+    for source, raw in gains.items():
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            log.warning("invalid Full Mix gain for %s — using 1.0", source)
+            value = 1.0
+        if not math.isfinite(value):
+            value = 1.0
+        clean_gains[str(source)] = max(0.0, min(value, 2.0))
+    rc.audio_track_mix_gains = clean_gains
 
 
 def _known_keys(cls, data: dict) -> dict:

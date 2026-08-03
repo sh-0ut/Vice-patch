@@ -4,6 +4,8 @@
 // Separate-audio-track ids in order (track 1 first). Mirrors
 // cfg.recording.audio_tracks; empty means "mix into one track".
 let audioTracks = [];
+let audioMixGains = {};
+let audioTrackNames = {};
 
 // ═══════════════════════════════════════════════════════════════════
 // Settings — fetch + save against /api/config
@@ -81,6 +83,8 @@ function syncFormFromCfg() {
   document.getElementById('s-clip-name').value = o.clip_name_template ?? '';
   updateClipNamePreview();
   audioTracks = Array.isArray(r.audio_tracks) ? [...r.audio_tracks] : [];
+  audioMixGains = (r.audio_track_mix_gains && typeof r.audio_track_mix_gains === 'object') ? {...r.audio_track_mix_gains} : {};
+  audioTrackNames = (r.audio_track_names && typeof r.audio_track_names === 'object') ? {...r.audio_track_names} : {};
   const mixEl = document.getElementById('s-track-mix');
   if (mixEl) mixEl.checked = !!r.audio_tracks_mix_first;
   renderAudioTracks();
@@ -339,6 +343,7 @@ async function onBackendChange() {
 // Friendly name for a source id, falling back to the raw id when the source
 // is not in the last fetched list (e.g. an app that stopped playing audio).
 function sourceLabel(id) {
+  if (audioTrackNames[id]) return audioTrackNames[id];
   const hit = (audioSourceInfo?.sources || []).find(s => s.id === id);
   return hit?.label || id;
 }
@@ -569,6 +574,30 @@ function renderAudioTracks() {
       `<button type="button" title="Remove track" onclick="removeAudioTrack(${i})">×</button>`;
     list.appendChild(chip);
   });
+  const gains = document.getElementById('s-mix-gains');
+  if (gains) {
+    gains.innerHTML = '';
+    audioTracks.forEach((id, i) => {
+      const value = Math.round(Math.max(0, Math.min(2, Number(audioMixGains[id] ?? 1))) * 100);
+      const row = document.createElement('div');
+      row.className = 'range-group';
+      row.innerHTML = `<span title="${escHtml(id)}">${escHtml(sourceLabel(id))}</span>` +
+        `<input type="range" min="0" max="200" step="1" value="${value}" oninput="setAudioMixGain(${i}, this.value)">` +
+        `<span class="range-val mono" id="s-mix-gain-${i}">${value}%</span>`;
+      gains.appendChild(row);
+    });
+  }
+}
+
+function setAudioMixGain(index, percent) {
+  const id = audioTracks[index]; if (!id) return;
+  audioMixGains[id] = Math.max(0, Math.min(2, Number(percent) / 100));
+  setText(`s-mix-gain-${index}`, `${Math.round(audioMixGains[id] * 100)}%`);
+}
+
+function resetAudioMixGains() {
+  audioTracks.forEach(id => { audioMixGains[id] = 1; });
+  renderAudioTracks();
 }
 
 async function saveSettings() {
@@ -609,6 +638,8 @@ async function saveSettings() {
       gsr_audio_source: document.getElementById('s-gsr-audio').value || 'default_output',
       audio_tracks:    [...audioTracks],
       audio_tracks_mix_first: document.getElementById('s-track-mix').checked,
+      audio_track_mix_gains: {...audioMixGains},
+      audio_track_names: {...audioTrackNames},
       gsr_args:        document.getElementById('s-gsr-args').value.trim(),
     },
     hotkeys: {

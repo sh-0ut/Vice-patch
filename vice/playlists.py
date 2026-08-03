@@ -28,11 +28,11 @@ from typing import Optional
 
 from importlib.resources import files as _pkg_files
 
-from .runtime import actual_home_dir
+from .instance import DATA_DIR
 
 log = logging.getLogger("vice.playlists")
 
-PLAYLISTS_PATH = actual_home_dir() / ".local" / "share" / "vice" / "playlists.json"
+PLAYLISTS_PATH = DATA_DIR / "playlists.json"
 
 # Same 8 gradient pairs as PL_COLORS in the UI; auto playlists pick one
 # deterministically so a recreated playlist keeps its look.

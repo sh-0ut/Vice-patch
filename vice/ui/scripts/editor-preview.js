@@ -332,7 +332,22 @@ function edSyncOutgoing(st, t) {
 // ═══════════════════════════════════════════════════════════════════
 // Audio items
 // ═══════════════════════════════════════════════════════════════════
-let edAudioPool = {};   // itemId -> Audio
+let edAudioPool = {};   // itemId -> {el, source, gain}
+let edAudioContext = null;
+
+function edAudioState(it) {
+  let state = edAudioPool[it.id];
+  if (state) return state;
+  const el = new Audio();
+  el.preload = 'auto';
+  edAudioContext = edAudioContext || new (window.AudioContext || window.webkitAudioContext)();
+  const source = edAudioContext.createMediaElementSource(el);
+  const gain = edAudioContext.createGain();
+  source.connect(gain).connect(edAudioContext.destination);
+  state = { el, source, gain };
+  edAudioPool[it.id] = state;
+  return state;
+}
 
 function edSyncAudio(t) {
   const audioTracks = edProject.tracks.filter(tr => tr.type === 'audio').map(tr => tr.id);
@@ -341,16 +356,12 @@ function edSyncAudio(t) {
     if (it.kind !== 'audio' || !audioTracks.includes(it.trackId)) return;
     if (t < it.start || t >= it.start + it.dur || edMissing.has(it.clipId)) return;
     active.add(it.id);
-    let a = edAudioPool[it.id];
     const clip = edClipOf(it);
     if (!clip) return;
-    if (!a) {
-      a = new Audio();
-      a.preload = 'auto';
-      edAudioPool[it.id] = a;
-    }
-    const url = playbackUrl(clip);
+    const state = edAudioState(it), a = state.el;
+    const url = `/api/editor/audio/${encodeURIComponent(it.clipId)}/${Number(it.audioStreamIndex ?? 0)}`;
     if (!a.src || !a.src.endsWith(url.slice(-40))) a.src = url;
+    state.gain.gain.value = it.muted ? 0 : Math.max(0, Math.min(2, Number(it.volume ?? 1)));
     const desired = (it.offset || 0) + (t - it.start);
     edSeekVideo(a, desired, edPlayTol());
     if (edPlaying && a.paused) { const p = a.play(); if (p) p.catch(() => {}); }
@@ -358,8 +369,11 @@ function edSyncAudio(t) {
   });
   Object.keys(edAudioPool).forEach(id => {
     if (!active.has(id)) {
-      edAudioPool[id].pause();
-      if (!edItem(id)) { edAudioPool[id].src = ''; delete edAudioPool[id]; }
+      edAudioPool[id].el.pause();
+      if (!edItem(id)) {
+        edAudioPool[id].source.disconnect(); edAudioPool[id].gain.disconnect();
+        edAudioPool[id].el.src = ''; delete edAudioPool[id];
+      }
     }
   });
 }
@@ -479,6 +493,13 @@ function edTextDrag(e, el, id) {
 function edRenderInspector() {
   const box = document.getElementById('ed-inspector');
   const it = edSelItem();
+  const audioBox = document.getElementById('ed-audio-inspector');
+  audioBox.hidden = !it || it.kind !== 'audio';
+  if (it && it.kind === 'audio') {
+    const volume = Math.max(0, Math.min(2, Number(it.volume ?? 1)));
+    document.getElementById('ed-audio-volume').value = Math.round(volume * 100);
+    setText('ed-audio-volume-val', `${Math.round(volume * 100)}%${it.muted ? ' · muted' : ''}`);
+  }
   if (!it || it.kind !== 'text') { box.hidden = true; return; }
   box.hidden = false;
   document.getElementById('ed-insp-text').value = it.text || '';
@@ -488,6 +509,23 @@ function edRenderInspector() {
   document.querySelectorAll('.ed-swatch').forEach(sw =>
     sw.classList.toggle('selected', sw.dataset.color === it.color));
   edUpdateInspectorPos();
+}
+
+function edAudioVolumeChange(value) {
+  const it = edSelItem();
+  if (!it || it.kind !== 'audio') return;
+  edBegin();
+  it.volume = Math.max(0, Math.min(2, Number(value)));
+  it.muted = false;
+  edScheduleSave();
+  edRenderInspector();
+  edSyncAudio(edPlayhead);
+}
+
+function edAudioMuteToggle() {
+  const it = edSelItem();
+  if (!it || it.kind !== 'audio') return;
+  edBegin(); it.muted = !it.muted; edScheduleSave(); edRenderInspector(); edSyncAudio(edPlayhead);
 }
 
 function edUpdateInspectorPos() {

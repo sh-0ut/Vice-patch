@@ -18,13 +18,13 @@ from typing import Optional
 from urllib.request import Request, urlopen
 
 from . import __version__
-from .runtime import actual_home_dir
+from .instance import DATA_DIR
 
 log = logging.getLogger("vice.updates")
 
 RELEASES_URL = "https://api.github.com/repos/eklonofficial/Vice/releases/latest"
 RELEASE_PAGE = "https://github.com/eklonofficial/Vice/releases/latest"
-CACHE_PATH = actual_home_dir() / ".local" / "share" / "vice" / "update.json"
+CACHE_PATH = DATA_DIR / "update.json"
 
 # One check a day. The unauthenticated GitHub limit is 60/hour per IP, so
 # this is nowhere near it, and the ETag makes the repeat calls cheap.
