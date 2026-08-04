@@ -1,6 +1,6 @@
 # Codex handoff: Vice Patch
 
-Останнє оновлення контексту: 2026-08-03, Europe/Kyiv.
+Останнє оновлення контексту: 2026-08-04, Europe/Kyiv.
 
 ## Репозиторій і Git
 
@@ -9,16 +9,19 @@
 - Fork: `https://github.com/sh-0ut/Vice-patch`
 - Гілка: `vice-patch`
 - `upstream/main`: `e4a92b3` (`v2.6.0`)
-- Опублікований commit: `004cc13 Add isolated Vice Patch with multi-stream audio support`
-- Локальний commit, який ще треба push-нути: `a634b4c Add safe trim copies and structured GSR controls`
-- Перед commit цього handoff-файла гілка була `ahead 1` від `origin/main`.
-- Команда публікації:
+- Стан під час останньої перевірки: `vice-patch...origin/main [ahead 2]`.
+- `origin/main`: `004cc13 Add isolated Vice Patch with multi-stream audio support`.
+- Локальні commits поверх `origin/main`:
+  - `a634b4c Add safe trim copies and structured GSR controls`
+  - `682b89c Add Codex handoff context`
+- Актуальну відмінність від remote завжди перевіряти через `git status` і `git log`; користувач міг виконати push між чатами.
+- Правильна команда, щоб опублікувати поточний `HEAD` локальної гілки `vice-patch` у `main` fork-а:
 
   ```bash
-  git push origin vice-patch:main
+  git push origin HEAD:main
   ```
 
-Handoff-файл має бути збережений окремим локальним commit; перевірити актуальний стан через `git log`.
+`git push origin HEAD` без `:main` може створити/оновити remote-гілку `vice-patch` залежно від Git-конфігурації, тому для GitHub `main` тут краще використовувати явний refspec вище.
 
 ## Критичні правила безпеки
 
@@ -232,11 +235,13 @@ systemctl --user is-active vice-patch.service
 
 ## Наступному агенту
 
-1. Прочитати цей файл і `VICE-PATCH.md`.
-2. Перевірити `git status`, `git log -2`, `git remote -v`.
+1. Працювати в `/home/sh0ut/Projects/Vice` і повністю прочитати цей файл та `VICE-PATCH.md`.
+2. Перед будь-якою зміною перевірити `git status`, `git log -5 --oneline --decorate`, `git remote -v`.
 3. Не припускати, що локальні зміни вже push-нуті.
 4. Не запускати upstream installer.
 5. Не змінювати production service/config/clips.
 6. Будь-який media rewrite спочатку робити на copy та валідовувати до publish/replace.
 7. Для оновлення patch використовувати `./install-patch.sh`; він не має стартувати service.
 8. Restart service — тільки за прямою командою користувача.
+9. Якщо запит стосується trim, спочатку перевірити, що endpoint створює новий `*-trimmed` файл і ніколи не замінює source.
+10. Якщо запит стосується аудіо, не об'єднувати `app:`, `app-inverse:` і microphone в новий невалідний GSR argument; зберігати описану hybrid Full Mix схему та незалежні editor item volumes.
