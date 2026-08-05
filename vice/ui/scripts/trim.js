@@ -7,6 +7,7 @@
 let trimPreviewing = false;
 
 function openTrim(slug, videoUrl) {
+  const releasedSlug = trimSlug;
   trimSlug = slug;
   document.getElementById('trim-title').textContent = `Trim · ${slug}`;
   document.getElementById('trim-status').textContent = 'Loops the selection · cut bounds are lossless';
@@ -21,6 +22,7 @@ function openTrim(slug, videoUrl) {
   vid.src = clip ? playbackUrl(clip) : videoUrl;
   setVideoPreparing(vid, 'trim-video-preparing', clip ? clipNeedsProxy(clip) : false);
   document.getElementById('trim-modal').classList.add('open');
+  if (releasedSlug && releasedSlug !== slug) releaseClipProxyIfUnused(releasedSlug);
 }
 function onTrimVideoMeta() {
   const v = document.getElementById('trim-video');
@@ -29,11 +31,13 @@ function onTrimVideoMeta() {
   renderTrimHandles(); refreshTrimUI();
 }
 function closeTrim() {
+  const releasedSlug = trimSlug;
   setTrimPreview(false);
   document.getElementById('trim-modal').classList.remove('open');
   const v = document.getElementById('trim-video');
   v.pause(); v.src = '';
   trimSlug = null;
+  releaseClipProxyIfUnused(releasedSlug);
 }
 
 function setTrimPreview(on) {

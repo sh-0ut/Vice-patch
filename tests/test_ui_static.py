@@ -298,12 +298,29 @@ class UIStaticCopyTests(unittest.TestCase):
         self.assertIn("HEVC_SUPPORTED", state_js)
         self.assertIn("playbackUrl", helpers_js)
         self.assertIn("proxy=1", helpers_js)
+        self.assertIn("endsWith('.mkv')", helpers_js)
         # Both playback surfaces resolve the URL through the proxy helper.
         self.assertIn("playbackUrl", viewer_js)
         self.assertIn("playbackUrl", trim_js)
         # And both show the preparing overlay while the proxy transcodes.
         self.assertIn('id="viewer-video-preparing"', self.index)
         self.assertIn('id="trim-video-preparing"', self.index)
+
+    def test_ephemeral_proxy_is_released_by_every_playback_surface(self) -> None:
+        helpers_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "helpers.js").read_text()
+        player_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "player.js").read_text()
+        viewer_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "viewer.js").read_text()
+        trim_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "trim.js").read_text()
+
+        self.assertIn("/proxy/release", helpers_js)
+        self.assertIn("releaseClipProxyIfUnused", player_js)
+        self.assertIn("releaseClipProxyIfUnused", viewer_js)
+        self.assertIn("releaseClipProxyIfUnused", trim_js)
+
+    def test_cards_use_small_persistent_hover_previews(self) -> None:
+        clips_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "clips.js").read_text()
+        self.assertIn("const hoverPreview = !!c.preview_url", clips_js)
+        self.assertIn("escAttr(c.preview_url)", clips_js)
 
     def test_update_notice_is_wired_and_stays_quiet_once_dismissed(self) -> None:
         self.assertIn('id="update-modal"', self.index)

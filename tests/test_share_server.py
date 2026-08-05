@@ -664,8 +664,7 @@ class ShareServerCopyFileTests(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
 class PreviewProxyTests(unittest.IsolatedAsyncioTestCase):
-    """H.265 clips can't decode in the native WebEngine, so the daemon hands
-    the viewer/trim an H.264 preview proxy instead."""
+    """The daemon gives browser-hostile codecs and containers an MP4 proxy."""
 
     @staticmethod
     def _vcodec(path: Path) -> str:
@@ -676,7 +675,7 @@ class PreviewProxyTests(unittest.IsolatedAsyncioTestCase):
         ).stdout.strip()
 
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg not installed")
-    async def test_non_h264_source_gets_a_cached_h264_proxy(self) -> None:
+    async def test_non_h264_source_reuses_an_active_h264_proxy(self) -> None:
         import vice.share as share_mod
         from vice.media import probe_media
         with tempfile.TemporaryDirectory() as tmp:
@@ -709,6 +708,33 @@ class PreviewProxyTests(unittest.IsolatedAsyncioTestCase):
                 proxy = await share_mod._make_preview_proxy(Path(tmp) / "x.mp4", "h264")
                 self.assertIsNone(proxy)
 
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg not installed")
+    async def test_h264_mkv_gets_a_single_audio_mp4_remux(self) -> None:
+        import vice.share as share_mod
+        from vice.media import probe_media
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "Vice_Clip_1.mkv"
+            subprocess.run(
+                ["ffmpeg", "-hide_banner", "-loglevel", "error",
+                 "-f", "lavfi", "-i", "testsrc=size=320x240:rate=30:duration=1",
+                 "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+                 "-f", "lavfi", "-i", "sine=frequency=880:duration=1",
+                 "-map", "0:v:0", "-map", "1:a:0", "-map", "2:a:0",
+                 "-c:v", "libx264", "-c:a", "libopus", "-y", str(src)],
+                check=True,
+            )
+
+            with mock.patch.object(share_mod, "PROXY_DIR", root / "proxies"):
+                proxy = await share_mod._make_preview_proxy(src, "h264")
+
+            self.assertIsNotNone(proxy)
+            self.assertEqual(proxy.suffix, ".mp4")
+            meta = await probe_media(proxy)
+            self.assertEqual(meta["vcodec"], "h264")
+            self.assertEqual(meta["audio_streams"], 1)
+            self.assertEqual(meta["audio_stream_info"][0]["codec"], "opus")
+
     def test_purge_removes_cached_proxy(self) -> None:
         import vice.share as share_mod
         with tempfile.TemporaryDirectory() as tmp:
@@ -718,6 +744,161 @@ class PreviewProxyTests(unittest.IsolatedAsyncioTestCase):
             with mock.patch.object(share_mod, "PROXY_DIR", proxy_dir):
                 share_mod._purge_slug_proxies("Vice_Clip_9")
             self.assertEqual(list(proxy_dir.glob("*.mp4")), [])
+
+    def test_startup_purge_removes_complete_and_partial_proxies(self) -> None:
+        import vice.share as share_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            proxy_dir = Path(tmp) / "proxies"
+            proxy_dir.mkdir()
+            (proxy_dir / "old.mp4").write_bytes(b"complete")
+            (proxy_dir / "old.mp4.tmp").write_bytes(b"partial")
+            (proxy_dir / "keep.txt").write_bytes(b"unrelated")
+            with mock.patch.object(share_mod, "PROXY_DIR", proxy_dir):
+                share_mod._purge_all_proxies()
+            self.assertEqual([p.name for p in proxy_dir.iterdir()], ["keep.txt"])
+
+    async def test_scheduled_cleanup_deletes_proxy_and_forgets_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            proxy = Path(tmp) / "preview.mp4"
+            proxy.write_bytes(b"proxy")
+            server = ShareServer(Config())
+            server._schedule_proxy_cleanup(proxy, 0)
+            await asyncio.sleep(0.01)
+            self.assertFalse(proxy.exists())
+            self.assertEqual(server._proxy_cleanup_tasks, {})
+
+    async def test_reopen_cancels_pending_proxy_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            proxy = Path(tmp) / "preview.mp4"
+            proxy.write_bytes(b"proxy")
+            server = ShareServer(Config())
+            server._schedule_proxy_cleanup(proxy, 0.01)
+            server._cancel_proxy_cleanup(proxy)
+            await asyncio.sleep(0.02)
+            self.assertTrue(proxy.exists())
+            self.assertEqual(server._proxy_cleanup_tasks, {})
+
+    async def test_release_endpoint_schedules_prompt_cleanup(self) -> None:
+        import vice.share as share_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "Vice_Clip_1.mkv"
+            src.write_bytes(b"source")
+            proxy_dir = root / "proxies"
+            server = ShareServer(Config())
+            server._clips = {src.stem: src}
+            req = mock.MagicMock()
+            req.match_info = {"slug": src.stem}
+            with mock.patch.object(share_mod, "PROXY_DIR", proxy_dir), \
+                 mock.patch.object(share_mod, "PROXY_RELEASE_DELAY", 0):
+                proxy = share_mod._proxy_path(src)
+                proxy.parent.mkdir(parents=True)
+                proxy.write_bytes(b"proxy")
+                response = await server._api_release_proxy(req)
+                await asyncio.sleep(0.01)
+            self.assertEqual(json.loads(response.text), {"ok": True})
+            self.assertFalse(proxy.exists())
+
+    async def test_cancelled_remux_stops_ffmpeg_and_removes_partial(self) -> None:
+        import vice.share as share_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "Vice_Clip_1.mkv"
+            src.write_bytes(b"source")
+            communicate_started = asyncio.Event()
+            never_finishes = asyncio.Event()
+            proc = mock.MagicMock(pid=12345, returncode=None)
+
+            async def communicate():
+                communicate_started.set()
+                await never_finishes.wait()
+
+            proc.communicate = communicate
+
+            async def fake_exec(*_args, **_kwargs):
+                return proc
+
+            stop = mock.AsyncMock()
+            with mock.patch.object(share_mod, "PROXY_DIR", root / "proxies"), \
+                 mock.patch("asyncio.create_subprocess_exec", new=fake_exec), \
+                 mock.patch.object(share_mod, "_stop_proxy_process", stop):
+                task = asyncio.create_task(share_mod._make_preview_proxy(src, "h264"))
+                await communicate_started.wait()
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+                partial = share_mod._proxy_path(src).with_suffix(".mp4.tmp")
+
+            stop.assert_awaited_once_with(proc)
+            self.assertFalse(partial.exists())
+
+
+@unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
+class HoverPreviewTests(unittest.IsolatedAsyncioTestCase):
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg not installed")
+    async def test_preview_is_a_small_silent_fifteen_second_480p_mp4(self) -> None:
+        import vice.share as share_mod
+        from vice.media import probe_media
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "Vice_Clip_1.mkv"
+            subprocess.run(
+                ["ffmpeg", "-hide_banner", "-loglevel", "error",
+                 "-f", "lavfi", "-i", "testsrc=size=640x360:rate=30:duration=20",
+                 "-f", "lavfi", "-i", "sine=frequency=440:duration=20",
+                 "-map", "0:v:0", "-map", "1:a:0",
+                 "-c:v", "libx264", "-c:a", "libopus", "-y", str(src)],
+                check=True,
+            )
+            preview_dir = root / "hover-previews"
+            with mock.patch.object(share_mod, "HOVER_PREVIEW_DIR", preview_dir):
+                preview = await share_mod._make_hover_preview(src, 20.0)
+                again = await share_mod._make_hover_preview(src, 20.0)
+
+            self.assertEqual(again, preview)
+            meta = await probe_media(preview)
+            self.assertEqual(meta["vcodec"], "h264")
+            self.assertEqual((meta["width"], meta["height"]), (480, 270))
+            self.assertEqual(meta["audio_streams"], 0)
+            self.assertAlmostEqual(meta["duration"], 15.0, delta=0.2)
+            fps = subprocess.run(
+                ["ffprobe", "-v", "error", "-select_streams", "v:0",
+                 "-show_entries", "stream=avg_frame_rate", "-of", "csv=p=0", str(preview)],
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            self.assertEqual(fps, "30/1")
+
+    def test_stale_preview_cleanup_keeps_only_current_source_identity(self) -> None:
+        import vice.share as share_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "Vice_Clip_1.mkv"
+            src.write_bytes(b"source")
+            preview_dir = root / "hover-previews"
+            preview_dir.mkdir()
+            with mock.patch.object(share_mod, "HOVER_PREVIEW_DIR", preview_dir):
+                current = share_mod._hover_preview_path(src)
+                current.write_bytes(b"current")
+                (preview_dir / "Vice_Clip_1_old.mp4").write_bytes(b"old")
+                (preview_dir / "partial.mp4.tmp").write_bytes(b"partial")
+                share_mod._purge_stale_hover_previews([src])
+            self.assertEqual([p.name for p in preview_dir.iterdir()], [current.name])
+
+    async def test_startup_warmup_generates_missing_previews_sequentially(self) -> None:
+        import vice.share as share_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            clips = [root / "one.mkv", root / "two.mp4"]
+            for clip in clips:
+                clip.write_bytes(b"source")
+            server = ShareServer(Config())
+            server._clips = {clip.stem: clip for clip in clips}
+            server._get_meta = mock.AsyncMock(return_value={"duration": 30.0})
+            make = mock.AsyncMock(return_value=root / "preview.mp4")
+            with mock.patch.object(share_mod, "HOVER_PREVIEW_DIR", root / "previews"), \
+                 mock.patch.object(share_mod, "_make_hover_preview", make):
+                await server._warm_hover_previews()
+            self.assertEqual(make.await_count, 2)
 
 
 @unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")

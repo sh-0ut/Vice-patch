@@ -30,6 +30,7 @@ function openViewer(slug) {
 function loadViewerClip(slug) {
   const idx = clips.findIndex(c => c.slug === slug);
   if (idx < 0) return false;
+  const releasedSlug = playerSlug;
   viewerSlug = slug; viewerIdx = idx;
   const c = clips[idx];
 
@@ -61,6 +62,7 @@ function loadViewerClip(slug) {
   document.getElementById('viewer-next').disabled = idx === clips.length - 1;
   loadViewerHighlights(slug);
   playerBind(slug);
+  if (releasedSlug && releasedSlug !== slug) releaseClipProxyIfUnused(releasedSlug);
   return true;
 }
 

@@ -151,10 +151,17 @@ function cardHTML(c) {
   const viewsStr = c.views ? `${c.views} view${c.views !== 1 ? 's' : ''}` : '';
   const meta  = [dateStr, resStr, sizeStr, viewsStr].filter(Boolean).join(' · ');
 
-  const hoverHandlers = 'onpointerenter="startPreview(this)" onpointerleave="stopPreview(this)"';
+  // Cards always use the tiny persistent 15-second tail preview. They never hand a
+  // full MP4 or browser-hostile MKV to the lightweight hover player.
+  const hoverPreview = !!c.preview_url;
+  const hoverHandlers = hoverPreview
+    ? 'onpointerenter="startPreview(this)" onpointerleave="stopPreview(this)"'
+    : '';
   const mediaHtml = c.thumb_url
     ? `<img src="${escAttr(c.thumb_url)}" loading="lazy" alt="" draggable="false">
-       <video class="preview-video" src="${escAttr(c.video_url)}" muted loop playsinline preload="none"></video>`
+       ${hoverPreview
+         ? `<video class="preview-video" src="${escAttr(c.preview_url)}" muted loop playsinline preload="none"></video>`
+         : ''}`
     : `<div class="thumb-placeholder">${svgEl('film', 32)}</div>`;
 
   const shareDisabled = !c.share_url;

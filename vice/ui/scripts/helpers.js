@@ -55,11 +55,13 @@ function videoFailureMessage() {
     : 'Vice could not play this clip in the app window. The file itself is most likely fine.';
 }
 
-// True when a clip is H.265 and this engine can't decode it, so playback needs
-// the daemon's H.264 preview proxy.
+// Large MKV files can make Firefox/Zen index at 100% CPU before playback, so
+// they use a cached MP4 remux. Unsupported H.265 still uses an H.264 proxy.
 function clipNeedsProxy(clip) {
   const vc = ((clip && clip.vcodec) || '').toLowerCase();
-  return (vc === 'hevc' || vc === 'h265') && !HEVC_SUPPORTED;
+  const name = ((clip && clip.name) || '').toLowerCase();
+  return name.endsWith('.mkv') ||
+         ((vc === 'hevc' || vc === 'h265') && !HEVC_SUPPORTED);
 }
 
 // Source URL to feed a <video> for a clip: the raw file, or the proxy when the
@@ -69,8 +71,18 @@ function playbackUrl(clip) {
   return clipNeedsProxy(clip) ? clip.video_url + '&proxy=1' : clip.video_url;
 }
 
-// Show a "preparing preview" overlay while the daemon transcodes the H.264
-// proxy on first open, so a proxied clip doesn't look frozen.
+// Playback proxies are deliberately ephemeral. Release only after neither the
+// shared viewer/player nor trim modal still owns this clip.
+function releaseClipProxyIfUnused(slug) {
+  if (!slug || playerSlug === slug || trimSlug === slug) return;
+  const clip = clips.find(c => c.slug === slug);
+  if (!clip || !clipNeedsProxy(clip)) return;
+  fetch(`/api/clips/${encodeURIComponent(slug)}/proxy/release`, { method: 'POST' })
+    .catch(() => {});
+}
+
+// Show a "preparing preview" overlay while the daemon remuxes or transcodes
+// the proxy on first open, so a proxied clip doesn't look frozen.
 function setVideoPreparing(videoEl, overlayId, needsProxy) {
   const ov = document.getElementById(overlayId);
   if (!ov) return;

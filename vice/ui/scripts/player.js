@@ -88,6 +88,7 @@ function playerShare() {
 function closePlayerBar() {
   const bar = playerBarEl();
   if (bar.style.display === 'none') return;
+  const releasedSlug = playerSlug;
   const vid = playerVideo();
   vid.pause();
   vid.removeAttribute('src');
@@ -101,6 +102,7 @@ function closePlayerBar() {
   }, 420);
   playerSlug = null;
   viewerSlug = null; viewerIdx = -1; viewerHighlights = [];
+  releaseClipProxyIfUnused(releasedSlug);
 }
 
 function updatePlayerUI() {
