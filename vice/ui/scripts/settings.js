@@ -131,10 +131,10 @@ function renderClipPresetRows(presets) {
   if (!list) return;
   list.innerHTML = '';
   const rows = Array.isArray(presets) ? presets : [];
-  rows.forEach(p => appendClipPresetRow(p.key || '', p.duration || 60));
+  rows.forEach(p => appendClipPresetRow(p.key || '', p.duration || 30));
 }
 
-function appendClipPresetRow(key = '', duration = 60) {
+function appendClipPresetRow(key = '', duration = 30) {
   const list = document.getElementById('clip-preset-list');
   if (!list) return;
   const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -144,7 +144,7 @@ function appendClipPresetRow(key = '', duration = 60) {
     <button id="clip-preset-btn-${id}" class="key-capture-btn mono" type="button"
             onclick="startKeyCapture('clip-preset-btn-${id}', 'clip-preset-key-${id}', false)">${escHtml(key || 'Set key')}</button>
     <input type="hidden" id="clip-preset-key-${id}" class="clip-preset-key" value="${escHtml(key)}">
-    <input type="number" class="clip-preset-duration" min="5" max="600" step="5" value="${Number(duration) || 60}">
+    <input type="number" class="clip-preset-duration" min="5" max="600" step="5" value="${Number(duration) || 30}">
     <span class="clip-preset-unit mono">s</span>
     <button class="btn-pill btn-ghost-pill btn-sm clip-preset-remove" type="button"
             onclick="this.closest('.clip-preset-row').remove()" title="Remove hotkey" aria-label="Remove hotkey">&times;</button>
@@ -153,13 +153,13 @@ function appendClipPresetRow(key = '', duration = 60) {
 }
 
 function addClipPresetRow() {
-  appendClipPresetRow('', 60);
+  appendClipPresetRow('', 30);
 }
 
 function collectClipPresetRows() {
   return [...document.querySelectorAll('.clip-preset-row')].map(row => ({
     key: row.querySelector('.clip-preset-key')?.value?.trim() || '',
-    duration: Number(row.querySelector('.clip-preset-duration')?.value || 60),
+    duration: Number(row.querySelector('.clip-preset-duration')?.value || 30),
   })).filter(row => row.key || row.duration);
 }
 

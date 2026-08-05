@@ -179,7 +179,9 @@ class HotkeyConfig:
     # Optional: toggle continuous recording on/off.
     toggle: Optional[str] = None
     # Additional clip hotkeys with their own durations.
-    clip_presets: list[HotkeyClipPreset] = field(default_factory=list)
+    clip_presets: list[HotkeyClipPreset] = field(
+        default_factory=lambda: [HotkeyClipPreset(key="KEY_F10", duration=30)]
+    )
     # Ignore Vice's hotkeys while one of these apps is focused, for games that
     # clip on the same keys themselves. Substrings matched case-insensitively
     # against the focused window's process name and class, e.g. ["mygame.exe"].

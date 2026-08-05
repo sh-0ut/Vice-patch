@@ -14,6 +14,8 @@
 - Локальні commits поверх `origin/main`:
   - `a634b4c Add safe trim copies and structured GSR controls`
   - `682b89c Add Codex handoff context`
+- Поточний worktree має незакомічені зміни для стандартного короткого кліпу
+  F10/30 с (див. розділ нижче). Не видаляти й не перезаписувати їх.
 - Актуальну відмінність від remote завжди перевіряти через `git status` і `git log`; користувач міг виконати push між чатами.
 - Правильна команда, щоб опублікувати поточний `HEAD` локальної гілки `vice-patch` у `main` fork-а:
 
@@ -193,6 +195,33 @@ Config fields у `RecordingConfig` мають prefix `gsr_...`.
 
 Structured controls default disabled, тому існуюча command line не змінюється до ввімкнення toggle.
 
+## Друга клавіша короткого кліпу
+
+Додаткові clip hotkeys із власною тривалістю вже були реалізовані наскрізно:
+
+- `HotkeyConfig.clip_presets` зберігається в TOML та Settings API;
+- кожен preset реєструє single-tap з власною duration;
+- duration передається в `recorder.save_clip(duration)`;
+- дублікати клавіш та некоректні duration відхиляються;
+- rolling buffer автоматично збільшується до найбільшої clip duration;
+- Settings -> Hotkeys має список `Additional clip hotkeys`.
+
+Поточні незакомічені зміни додають бажаний default:
+
+- основний кліп: `KEY_F9`, duration з `recording.clip_duration`;
+- короткий кліп: `KEY_F10`, 30 секунд;
+- для legacy config без `hotkeys.clip_presets` підставляється F10/30;
+- явно збережений користувачем порожній список preset-ів лишається порожнім;
+- новий рядок у Settings отримує початкову duration 30 с.
+
+Змінені файли:
+
+- `vice/config.py`;
+- `vice/ui/scripts/state.js`;
+- `vice/ui/scripts/settings.js`;
+- `tests/test_runtime_and_recorder.py`;
+- `tests/test_ui_static.py`.
+
 ## Тести і перевірки
 
 Останній релевантний запуск після Advanced controls:
@@ -214,6 +243,12 @@ Structured controls default disabled, тому існуюча command line не 
 
 Повний upstream unittest discovery іноді зависав у довгих runtime/share tests; релевантні suites запускалися окремо.
 
+Після зміни F10/30:
+
+- 8 цільових config/runtime/API/UI tests — OK;
+- `python3 -m compileall -q vice` — OK;
+- `git diff --check` — OK.
+
 ## Production integrity
 
 Під час першої інсталяції до/після звіряли hashes/timestamps:
@@ -226,7 +261,17 @@ Structured controls default disabled, тому існуюча command line не 
 
 Вони не змінилися. Production clips не повинні змінюватися.
 
-Стан сервісів міг змінювати сам користувач у процесі роботи. Завжди перевіряти актуальний стан read-only перед висновками:
+2026-08-04 користувач прямо попросив зробити Vice Patch основною запущеною
+версією. Було виконано `./install-patch.sh`, потім production service вимкнено,
+а patch service увімкнено з автозапуском. Перевірений результат одразу після
+операції:
+
+- `vice.service`: `disabled`, `inactive`;
+- `vice-patch.service`: `enabled`, `active`.
+
+Це навмисний актуальний стан: після входу має стартувати Vice Patch, а не
+оригінальний Vice. Не вмикати production service без прямого прохання
+користувача. Стан міг змінитися пізніше, тому завжди перевіряти read-only:
 
 ```bash
 systemctl --user is-active vice.service
@@ -241,7 +286,7 @@ systemctl --user is-active vice-patch.service
 4. Не запускати upstream installer.
 5. Не змінювати production service/config/clips.
 6. Будь-який media rewrite спочатку робити на copy та валідовувати до publish/replace.
-7. Для оновлення patch використовувати `./install-patch.sh`; він не має стартувати service.
+7. Для оновлення patch використовувати `./install-patch.sh`; він не має стартувати service. Якщо patch уже active, після перевстановлення новий backend-код підхопиться лише після дозволеного користувачем restart.
 8. Restart service — тільки за прямою командою користувача.
 9. Якщо запит стосується trim, спочатку перевірити, що endpoint створює новий `*-trimmed` файл і ніколи не замінює source.
 10. Якщо запит стосується аудіо, не об'єднувати `app:`, `app-inverse:` і microphone в новий невалідний GSR argument; зберігати описану hybrid Full Mix схему та незалежні editor item volumes.

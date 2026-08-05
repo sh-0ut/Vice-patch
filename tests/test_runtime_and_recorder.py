@@ -538,6 +538,30 @@ class ConfigPathResolutionTests(unittest.TestCase):
         self.assertEqual(loaded.hotkeys.clip_presets[0].duration, 120)
         self.assertEqual(loaded.recording.buffer_duration, 120)
 
+    def test_default_secondary_clip_hotkey_is_f10_for_thirty_seconds(self) -> None:
+        cfg = Config()
+
+        self.assertEqual(len(cfg.hotkeys.clip_presets), 1)
+        self.assertEqual(cfg.hotkeys.clip_presets[0].key, "KEY_F10")
+        self.assertEqual(cfg.hotkeys.clip_presets[0].duration, 30)
+
+    def test_load_adds_default_secondary_clip_hotkey_to_legacy_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / ".config" / "vice"
+            config_dir.mkdir(parents=True)
+            config_path = config_dir / "config.toml"
+            config_path.write_text('[hotkeys]\nclip = "KEY_F9"\n')
+
+            with mock.patch.object(config_mod, "CONFIG_DIR", config_dir):
+                with mock.patch.object(config_mod, "CONFIG_PATH", config_path):
+                    loaded = config_mod.load()
+
+        self.assertEqual(
+            [(preset.key, preset.duration) for preset in loaded.hotkeys.clip_presets],
+            [("KEY_F10", 30)],
+        )
+
     def test_load_ignores_malformed_clip_presets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

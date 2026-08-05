@@ -255,6 +255,10 @@ class UIStaticCopyTests(unittest.TestCase):
         state_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "state.js").read_text()
         self.assertIn("clip_duration: 20", state_js)
 
+    def test_default_secondary_clip_hotkey_is_f10_for_thirty_seconds(self) -> None:
+        state_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "state.js").read_text()
+        self.assertIn("clip_presets: [{ key: 'KEY_F10', duration: 30 }]", state_js)
+
     def test_home_lede_duration_is_data_driven(self) -> None:
         # The "last N of your gameplay" copy must reflect the configured clip
         # duration, not a hardcoded number.
