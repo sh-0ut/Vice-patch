@@ -150,6 +150,10 @@ class ViceDaemon:
         self._update_task: Optional[asyncio.Task] = None
         self._update: Optional[dict] = None
         self._ready = False
+        # The control plane (UI/API/library) must stay available even when the
+        # capture backend cannot start.  Keep the latest recorder failure so
+        # clients can explain the degraded state instead of looking empty.
+        self._recording_error: Optional[str] = None
         # Discord Rich Presence — default enabled, but only shown for matched games.
         self._discord_rpc = None  # type: ignore[var-annotated]
         self._discord_task: Optional[asyncio.Task] = None
@@ -227,38 +231,19 @@ class ViceDaemon:
             if conflict:
                 raise RuntimeError(f"Vice Patch recorder refused to start: {conflict}")
             await self.recorder.start()
-            self._ready = True
         except Exception as exc:
             log.error(
-                "Vice daemon failed during startup (backend=%s): %s",
+                "Recorder unavailable during startup (backend=%s): %s. "
+                "Keeping the UI/API online and retrying in the background.",
                 self.recorder.name, exc,
             )
             log.exception("Startup traceback")
-            try:
-                server.close()
-                await server.wait_closed()
-            except Exception:
-                pass
-            try:
-                await self.hotkeys.stop()
-            except Exception:
-                pass
+            self._recording_error = str(exc)
             try:
                 await self.recorder.stop()
             except Exception:
                 pass
-            if self.share:
-                try:
-                    await self.share.stop()
-                except Exception:
-                    pass
-            for p in (PID_FILE, SOCKET_FILE):
-                try:
-                    if p.exists():
-                        p.unlink()
-                except OSError:
-                    pass
-            raise
+        self._ready = True
         if self.share:
             log.info("Vice local control UI: %s", self.share.local_base_url())
         else:
@@ -272,15 +257,17 @@ class ViceDaemon:
         if self.share:
             asyncio.create_task(
                 self.share.broadcast({
-                    "type": "status", "recording": True, "ready": self._ready,
+                    "type": "status", "recording": self.recorder.is_healthy(), "ready": self._ready,
                     "backend": self.recorder.name,
+                    "recording_error": self._recording_error,
                     "session_active": self._session_active,
                     "clip_key": self.cfg.hotkeys.clip,
                     "hotkeys_available": self.hotkeys_available,
                 })
             )
 
-        click.echo(f"[Vice {__version__}] Recording started.")
+        state = "Recording started" if self.recorder.is_healthy() else "UI ready; recorder unavailable"
+        click.echo(f"[Vice {__version__}] {state}.")
         click.echo(f"  Backend   : {self.recorder.name}")
         click.echo(f"  Clip key  : {clip_key or '(none)'}")
         click.echo(f"  Output    : {self.cfg.output.directory}")
@@ -313,8 +300,9 @@ class ViceDaemon:
         if self.share:
             asyncio.create_task(
                 self.share.broadcast({
-                    "type": "status", "recording": self._ready, "ready": self._ready,
+                    "type": "status", "recording": self.recorder.is_healthy(), "ready": self._ready,
                     "backend": self.recorder.name,
+                    "recording_error": self._recording_error,
                     "session_active": self._session_active,
                     "clip_key": self.cfg.hotkeys.clip,
                     "hotkeys_available": available,
@@ -352,6 +340,7 @@ class ViceDaemon:
             self.share.broadcast({
                 "type": "status", "recording": recording, "ready": self._ready,
                 "backend": self.recorder.name,
+                "recording_error": self._recording_error,
                 "session_active": self._session_active,
                 "clip_key": self.cfg.hotkeys.clip,
                 "hotkeys_available": self.hotkeys_available,
@@ -402,12 +391,14 @@ class ViceDaemon:
                         await self.recorder.start()
             except Exception as exc:
                 log.error("Recorder restart failed: %s — retrying in %.0f s", exc, backoff)
+                self._recording_error = str(exc)
                 self._broadcast_status(recording=False)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 300.0)
                 last_wall = time.time()
                 continue
             log.info("Recorder restarted (backend=%s)", self.recorder.name)
+            self._recording_error = None
             self._broadcast_status(recording=True)
             # A process that clears the startup probe and then dies seconds
             # later never reaches the failed-start path above, so without this
@@ -462,6 +453,7 @@ class ViceDaemon:
             raise
 
         self.recorder = new_recorder
+        self._recording_error = None
         self._recording_sig = self._recording_signature()
         self._pending_recording_apply = False
         return True
@@ -576,9 +568,10 @@ class ViceDaemon:
             if self.share:
                 await self.share.broadcast({
                     "type": "status",
-                    "recording": True,
+                    "recording": self.recorder.is_healthy(),
                     "ready": self._ready,
                     "backend": self.recorder.name,
+                    "recording_error": self._recording_error,
                     "session_active": self._session_active,
                     "clip_key": self.cfg.hotkeys.clip,
                     "hotkeys_available": self.hotkeys_available,
@@ -805,7 +798,8 @@ class ViceDaemon:
     def _get_status(self) -> dict:
         return {
             "ready":          self._ready,
-            "recording":      True,
+            "recording":      self.recorder.is_healthy(),
+            "recording_error": self._recording_error,
             "backend":          self.recorder.name,
             "clips":            self._clip_count,
             "session_active":   self._session_active,
@@ -1056,6 +1050,8 @@ class ViceDaemon:
                 writer.write(json.dumps({
                     "running":        True,
                     "ready":          self._ready,
+                    "recording":      self.recorder.is_healthy(),
+                    "recording_error": self._recording_error,
                     "version":        __version__,
                     "backend":        self.recorder.name,
                     "clips":          self._clip_count,

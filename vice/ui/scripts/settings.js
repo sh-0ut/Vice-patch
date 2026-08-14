@@ -344,6 +344,47 @@ function onFollowMouseChange() {
   note.style.color = supported ? 'var(--text-dim)' : '#fcd34d';
 }
 
+function onDisplayChange() {
+  const display = document.getElementById('s-display')?.value || '';
+  if (!display) return;
+  const args = document.getElementById('s-gsr-args');
+  if (args && /(?:^|\s)-w\s+portal(?:\s|$)/.test(args.value)) args.value = '';
+}
+
+async function choosePortalSource() {
+  const button = document.getElementById('s-portal-picker');
+  const display = document.getElementById('s-display');
+  const follow = document.getElementById('s-follow-mouse');
+  const backend = document.getElementById('s-backend');
+  const args = document.getElementById('s-gsr-args');
+  if (!button || !display || !follow || !backend || !args) return;
+
+  display.value = '';
+  follow.checked = false;
+  backend.value = 'gsr';
+  args.value = '-w portal -restore-portal-session no';
+  button.disabled = true;
+  button.textContent = 'Waiting for selection…';
+  toast('Choose a screen, window, or area in the gpu-screen-recorder picker.');
+  try {
+    const data = await persistConfig({recording: {
+      display: null,
+      follow_mouse_display: false,
+      backend: 'gsr',
+      gsr_args: '-w portal -restore-portal-session no',
+    }});
+    if (data.applied === false) {
+      throw new Error(data.error || data.warning || 'The source picker could not be opened.');
+    }
+    toast('Recording source selected.');
+  } catch (err) {
+    toast(err?.message || 'Failed to open the source picker', 'err');
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Open source picker…';
+  }
+}
+
 async function onBackendChange() {
   const preferred = document.getElementById('s-display')?.value || cfg.recording?.display || null;
   await refreshDisplayOptions(selectedBackend(), preferred);

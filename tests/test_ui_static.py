@@ -71,6 +71,13 @@ class UIStaticCopyTests(unittest.TestCase):
         self.assertIn('id="s-dur" min="5" max="1800"', self.index)
         self.assertIn('id="s-buf" min="30" max="1800"', self.index)
 
+    def test_recorder_failure_is_visible_without_hiding_library(self) -> None:
+        status_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "status.js").read_text()
+        websocket_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "ws.js").read_text()
+        self.assertIn("Recorder error", status_js)
+        self.assertIn("d.recording_error", status_js)
+        self.assertIn("msg.recording_error", websocket_js)
+
     def test_replay_storage_setting_exists(self) -> None:
         self.assertIn('id="s-replay-storage"', self.index)
         settings_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "settings.js").read_text()

@@ -532,9 +532,14 @@
 
               <div class="settings-row">
                 <div class="s-label"><strong>Display</strong><span id="s-display-note">Choose which display to record (Auto = current display)</span></div>
-                <select id="s-display">
+                <select id="s-display" onchange="onDisplayChange()">
                   <option value="">Auto (current display)</option>
                 </select>
+              </div>
+
+              <div class="settings-row">
+                <div class="s-label"><strong>Choose screen, window, or area</strong><span>Open the gpu-screen-recorder portal picker and use that source for recording.</span></div>
+                <button class="btn-pill btn-ghost-pill btn-sm" id="s-portal-picker" onclick="choosePortalSource()">Open source picker…</button>
               </div>
             </div>
 

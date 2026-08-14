@@ -48,7 +48,7 @@ function handleWS(msg) {
   } else if (msg.type === 'clip_error') {
     toast(msg.error || 'Clip save failed', 'err');
   } else if (msg.type === 'status') {
-    setRecStatus(msg.recording, msg.backend, msg.session_active);
+    setRecStatus(msg.recording, msg.backend, msg.session_active, msg.recording_error);
     applyHotkeyAvailability(msg.hotkeys_available);
   } else if (msg.type === 'tunnel_url') {
     tunnelUrl = msg.url;

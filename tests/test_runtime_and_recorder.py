@@ -706,6 +706,23 @@ class _FakeShare:
 
 
 class ViceDaemonClipFlowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_status_reports_recorder_failure_without_hiding_daemon(self) -> None:
+        recorder = _FakeRecorder()
+        recorder.healthy = False
+        with mock.patch("vice.main.load_config", return_value=Config()), \
+             mock.patch("vice.main.create_recorder", return_value=recorder), \
+             mock.patch("vice.main.HotkeyListener", return_value=_FakeHotkeys()), \
+             mock.patch("vice.main.can_access_hotkeys", return_value=True):
+            daemon = main_mod.ViceDaemon()
+
+        daemon._ready = True
+        daemon._recording_error = "gpu-screen-recorder failed to start"
+        status = daemon._get_status()
+
+        self.assertTrue(status["ready"])
+        self.assertFalse(status["recording"])
+        self.assertIn("failed to start", status["recording_error"])
+
     async def test_clip_trigger_broadcasts_progress_and_error(self) -> None:
         recorder = _FakeRecorder(result=None)
         with mock.patch("vice.main.load_config", return_value=Config()):
@@ -760,11 +777,13 @@ class ViceDaemonClipFlowTests(unittest.IsolatedAsyncioTestCase):
         # A config change swaps in a new recorder; it must be wired the same way
         # or game tagging and auto playlists silently stop after any settings edit.
         daemon._session_active = False
+        daemon._recording_error = "old backend failure"
         with mock.patch("vice.main.create_recorder", return_value=second):
             applied = await daemon._restart_recorder_for_config()
 
         self.assertTrue(applied)
         self.assertIs(daemon.recorder, second)
+        self.assertIsNone(daemon._recording_error)
         self.assertEqual(second._cb, daemon._on_clip_saved)
         self.assertEqual(second.clip_tag_cb, daemon._clip_game_tag)
 

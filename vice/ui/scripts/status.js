@@ -7,7 +7,7 @@
 let _sessionTimerInterval = null;
 let _sessionStartTs = 0;
 
-function setRecStatus(live, backend, sessionActive) {
+function setRecStatus(live, backend, sessionActive, recordingError) {
   runtimeBackend = backend || runtimeBackend;
   const chip = document.getElementById('rec-chip');
   const dot  = document.getElementById('rec-dot');
@@ -34,9 +34,10 @@ function setRecStatus(live, backend, sessionActive) {
       clearSessionTimer();
     }
   } else {
-    lbl.textContent = 'Idle';
+    lbl.textContent = recordingError ? 'Recorder error' : 'Idle';
     clearSessionTimer();
   }
+  chip.title = recordingError || 'Recording status';
   setText('about-backend', runtimeBackend || 'auto');
   setText('side-buffer-readout', bufferReadout());
 }
@@ -66,7 +67,7 @@ async function fetchStatus() {
     const d = await r.json();
     runtimeBackend = d.backend || runtimeBackend;
     if (d.version) viceVersion = d.version;
-    setRecStatus(d.recording, d.backend, d.session_active);
+    setRecStatus(d.recording, d.backend, d.session_active, d.recording_error);
     applyHotkeyAvailability(d.hotkeys_available);
     // The daily check may have already run before this window opened.
     if (d.update && typeof onUpdateAvailable === 'function') {
